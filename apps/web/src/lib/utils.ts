@@ -52,6 +52,8 @@ export function createUuid(): string {
   return formatUuidV4(randomBytesFromMath());
 }
 
+export const randomUUID = (): string => createUuid();
+
 export const newCommandId = (): CommandId => CommandId.makeUnsafe(createUuid());
 
 export const newProjectId = (): ProjectId => ProjectId.makeUnsafe(createUuid());

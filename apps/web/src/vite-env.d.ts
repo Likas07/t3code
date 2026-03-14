@@ -16,3 +16,19 @@ declare global {
     desktopBridge?: DesktopBridge;
   }
 }
+
+declare module "@rolldown/plugin-babel" {
+  import type { PluginOption } from "vite";
+
+  export default function babel(options?: {
+    parserOpts?: unknown;
+    presets?: readonly unknown[];
+  }): PluginOption;
+}
+
+declare module "@vitejs/plugin-react" {
+  import type { PluginOption } from "vite";
+
+  export default function react(...args: readonly unknown[]): PluginOption;
+  export function reactCompilerPreset(...args: readonly unknown[]): unknown;
+}

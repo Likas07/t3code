@@ -1071,6 +1071,20 @@ const EventBaseFields = {
   metadata: OrchestrationEventMetadata,
 } as const;
 
+const PersistedEventBaseFields = {
+  sequence: NonNegativeInt,
+  eventId: EventId,
+  aggregateKind: OrchestrationAggregateKind,
+  streamId: Schema.Union([ProjectId, ThreadId]),
+  streamVersion: NonNegativeInt,
+  occurredAt: IsoDateTime,
+  commandId: Schema.NullOr(CommandId),
+  causationEventId: Schema.NullOr(EventId),
+  correlationId: Schema.NullOr(CommandId),
+  actorKind: OrchestrationActorKind,
+  metadata: OrchestrationEventMetadata,
+} as const;
+
 export const OrchestrationEvent = Schema.Union([
   Schema.Struct({
     ...EventBaseFields,
