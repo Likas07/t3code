@@ -19,6 +19,12 @@ import {
   ProjectionThreadMessageRepository,
 } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import {
+  ProjectionThreadDelegationBatchRepository,
+} from "../../persistence/Services/ProjectionThreadDelegationBatches.ts";
+import {
+  ProjectionThreadDelegationChildRepository,
+} from "../../persistence/Services/ProjectionThreadDelegationChildren.ts";
+import {
   type ProjectionThreadProposedPlan,
   ProjectionThreadProposedPlanRepository,
 } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
@@ -33,6 +39,8 @@ import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/Projec
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
+import { ProjectionThreadDelegationBatchRepositoryLive } from "../../persistence/Layers/ProjectionThreadDelegationBatches.ts";
+import { ProjectionThreadDelegationChildRepositoryLive } from "../../persistence/Layers/ProjectionThreadDelegationChildren.ts";
 import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/Layers/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
@@ -53,6 +61,8 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
   threads: "projection.threads",
   threadMessages: "projection.thread-messages",
+  threadDelegationBatches: "projection.thread-delegation-batches",
+  threadDelegationChildren: "projection.thread-delegation-children",
   threadProposedPlans: "projection.thread-proposed-plans",
   threadActivities: "projection.thread-activities",
   threadSessions: "projection.thread-sessions",
@@ -117,6 +127,10 @@ function retainProjectionMessagesAfterRevert(
 
   for (const message of messages) {
     if (message.role === "system") {
+      retainedMessageIds.add(message.messageId);
+      continue;
+    }
+    if (message.origin === "fork-import") {
       retainedMessageIds.add(message.messageId);
       continue;
     }
@@ -344,6 +358,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const projectionProjectRepository = yield* ProjectionProjectRepository;
   const projectionThreadRepository = yield* ProjectionThreadRepository;
   const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
+  const projectionThreadDelegationBatchRepository = yield* ProjectionThreadDelegationBatchRepository;
+  const projectionThreadDelegationChildRepository = yield* ProjectionThreadDelegationChildRepository;
   const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
@@ -426,6 +442,18 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
             latestTurnId: null,
+            forkKind: event.payload.fork?.kind ?? null,
+            forkSourceThreadId: event.payload.fork?.sourceThreadId ?? null,
+            forkBootstrapStatus: event.payload.fork?.bootstrapStatus ?? null,
+            forkImportedMessageCount: event.payload.fork?.importedMessageCount ?? null,
+            forkCreatedAt: event.payload.fork?.createdAt ?? null,
+            forkBootstrappedAt: event.payload.fork?.bootstrappedAt ?? null,
+            rootThreadId: event.payload.lineage.rootThreadId,
+            parentThreadId: event.payload.lineage.parentThreadId,
+            delegationDepth: event.payload.lineage.delegationDepth,
+            delegationRole: event.payload.lineage.role,
+            parentBatchId: event.payload.lineage.parentBatchId,
+            parentTaskIndex: event.payload.lineage.parentTaskIndex,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             deletedAt: null,
@@ -498,6 +526,24 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return;
         }
 
+        case "thread.fork-bootstrap-completed": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            forkBootstrapStatus:
+              existingRow.value.forkKind === null ? null : "completed",
+            forkBootstrappedAt:
+              existingRow.value.forkKind === null ? null : event.payload.bootstrappedAt,
+            updatedAt: event.occurredAt,
+          });
+          return;
+        }
+
         case "thread.message-sent":
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended": {
@@ -564,6 +610,147 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       }
     });
 
+  const applyThreadDelegationBatchesProjection: ProjectorDefinition["apply"] = (
+    event,
+    _attachmentSideEffects,
+  ) =>
+    Effect.gen(function* () {
+      switch (event.type) {
+        case "thread.delegation-batch-created":
+          yield* projectionThreadDelegationBatchRepository.upsert({
+            batchId: event.payload.batchId,
+            parentThreadId: event.payload.parentThreadId,
+            parentTurnId: event.payload.parentTurnId,
+            workspaceMode: event.payload.workspaceMode,
+            concurrencyLimit: event.payload.concurrencyLimit,
+            status: event.payload.status,
+            createdAt: event.payload.createdAt,
+            updatedAt: event.payload.updatedAt,
+            completedAt: event.payload.completedAt,
+          });
+          return;
+
+        case "thread.delegation-child-linked":
+        case "thread.delegation-child-status-set":
+        case "thread.delegation-child-result-recorded": {
+          const existingRows = yield* projectionThreadDelegationBatchRepository.listByParentThreadId({
+            parentThreadId: event.payload.parentThreadId,
+          });
+          const existingRow = existingRows.find((row) => row.batchId === event.payload.batchId);
+          if (!existingRow) {
+            return;
+          }
+          yield* projectionThreadDelegationBatchRepository.upsert({
+            ...existingRow,
+            updatedAt:
+              "updatedAt" in event.payload ? event.payload.updatedAt : event.occurredAt,
+          });
+          return;
+        }
+
+        case "thread.delegation-batch-completed": {
+          const existingRows = yield* projectionThreadDelegationBatchRepository.listByParentThreadId({
+            parentThreadId: event.payload.parentThreadId,
+          });
+          const existingRow = existingRows.find((row) => row.batchId === event.payload.batchId);
+          if (!existingRow) {
+            return;
+          }
+          yield* projectionThreadDelegationBatchRepository.upsert({
+            ...existingRow,
+            status: event.payload.status,
+            updatedAt: event.payload.completedAt,
+            completedAt: event.payload.completedAt,
+          });
+          return;
+        }
+
+        case "thread.deleted":
+          yield* projectionThreadDelegationBatchRepository.deleteByParentThreadId({
+            parentThreadId: event.payload.threadId,
+          });
+          return;
+
+        default:
+          return;
+      }
+    });
+
+  const applyThreadDelegationChildrenProjection: ProjectorDefinition["apply"] = (
+    event,
+    _attachmentSideEffects,
+  ) =>
+    Effect.gen(function* () {
+      switch (event.type) {
+        case "thread.delegation-child-linked":
+          yield* projectionThreadDelegationChildRepository.upsert({
+            batchId: event.payload.batchId,
+            parentThreadId: event.payload.parentThreadId,
+            childThreadId: event.payload.child.childThreadId,
+            taskIndex: event.payload.child.taskIndex,
+            title: event.payload.child.title,
+            prompt: event.payload.child.prompt,
+            status: event.payload.child.status,
+            branch: event.payload.child.branch,
+            worktreePath: event.payload.child.worktreePath,
+            startedAt: event.payload.child.startedAt,
+            completedAt: event.payload.child.completedAt,
+            summary: event.payload.child.summary,
+            error: event.payload.child.error,
+            blockingRequestId: event.payload.child.blockingRequestId,
+            blockingKind: event.payload.child.blockingKind,
+            updatedAt: event.occurredAt,
+          });
+          return;
+
+        case "thread.delegation-child-status-set":
+        case "thread.delegation-child-result-recorded": {
+          const existingRows = yield* projectionThreadDelegationChildRepository.listByParentThreadId({
+            parentThreadId: event.payload.parentThreadId,
+          });
+          const existingRow = existingRows.find(
+            (row) => row.childThreadId === event.payload.childThreadId,
+          );
+          if (!existingRow) {
+            return;
+          }
+          if (event.type === "thread.delegation-child-status-set") {
+            yield* projectionThreadDelegationChildRepository.upsert({
+              ...existingRow,
+              status: event.payload.status,
+              blockingRequestId: event.payload.blockingRequestId,
+              blockingKind: event.payload.blockingKind,
+              startedAt:
+                existingRow.startedAt ?? (event.payload.status === "running" ? event.payload.updatedAt : null),
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+          }
+          yield* projectionThreadDelegationChildRepository.upsert({
+            ...existingRow,
+            status: event.payload.status,
+            summary: event.payload.summary,
+            error: event.payload.error,
+            completedAt: event.payload.completedAt,
+            blockingRequestId: null,
+            blockingKind: null,
+            startedAt: existingRow.startedAt ?? event.payload.completedAt,
+            updatedAt: event.payload.completedAt,
+          });
+          return;
+        }
+
+        case "thread.deleted":
+          yield* projectionThreadDelegationChildRepository.deleteByParentThreadId({
+            parentThreadId: event.payload.threadId,
+          });
+          return;
+
+        default:
+          return;
+      }
+    });
+
   const applyThreadMessagesProjection: ProjectorDefinition["apply"] = (
     event,
     attachmentSideEffects,
@@ -596,6 +783,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             role: event.payload.role,
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
+            origin: event.payload.origin,
             isStreaming: event.payload.streaming,
             createdAt: existingMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -1101,6 +1289,14 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       apply: applyThreadMessagesProjection,
     },
     {
+      name: ORCHESTRATION_PROJECTOR_NAMES.threadDelegationBatches,
+      apply: applyThreadDelegationBatchesProjection,
+    },
+    {
+      name: ORCHESTRATION_PROJECTOR_NAMES.threadDelegationChildren,
+      apply: applyThreadDelegationChildrenProjection,
+    },
+    {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
       apply: applyThreadProposedPlansProjection,
     },
@@ -1223,6 +1419,8 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionProjectRepositoryLive),
   Layer.provideMerge(ProjectionThreadRepositoryLive),
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
+  Layer.provideMerge(ProjectionThreadDelegationBatchRepositoryLive),
+  Layer.provideMerge(ProjectionThreadDelegationChildRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),
   Layer.provideMerge(ProjectionThreadActivityRepositoryLive),
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),

@@ -58,6 +58,14 @@ interface PendingUserInputRequest {
   itemId?: ProviderItemId;
 }
 
+interface PendingToolCallRequest {
+  requestId: ApprovalRequestId;
+  jsonRpcId: string | number;
+  threadId: ThreadId;
+  turnId?: TurnId;
+  itemId?: ProviderItemId;
+}
+
 interface CodexUserInputAnswer {
   answers: string[];
 }
@@ -70,6 +78,7 @@ interface CodexSessionContext {
   pending: Map<PendingRequestKey, PendingRequest>;
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
+  pendingToolCalls: Map<ApprovalRequestId, PendingToolCallRequest>;
   nextRequestId: number;
   stopping: boolean;
 }
@@ -571,6 +580,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         pending: new Map(),
         pendingApprovals: new Map(),
         pendingUserInputs: new Map(),
+        pendingToolCalls: new Map(),
         nextRequestId: 1,
         stopping: false,
       };
@@ -971,6 +981,42 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     });
   }
 
+  async resolveToolCall(
+    threadId: ThreadId,
+    requestId: ApprovalRequestId,
+    result: unknown,
+  ): Promise<void> {
+    const context = this.requireSession(threadId);
+    const pendingRequest = context.pendingToolCalls.get(requestId);
+    if (!pendingRequest) {
+      throw new Error(`Unknown pending tool call request: ${requestId}`);
+    }
+
+    context.pendingToolCalls.delete(requestId);
+    this.writeMessage(context, {
+      id: pendingRequest.jsonRpcId,
+      result,
+    });
+
+    this.emitEvent({
+      id: EventId.makeUnsafe(randomUUID()),
+      kind: "notification",
+      provider: "codex",
+      threadId: context.session.threadId,
+      createdAt: new Date().toISOString(),
+      method: "serverRequest/resolved",
+      turnId: pendingRequest.turnId,
+      itemId: pendingRequest.itemId,
+      requestId: pendingRequest.requestId,
+      payload: {
+        request: {
+          method: "item/tool/call",
+        },
+        result,
+      },
+    });
+  }
+
   stopSession(threadId: ThreadId): void {
     const context = this.sessions.get(threadId);
     if (!context) {
@@ -1216,6 +1262,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       });
     }
 
+    if (request.method === "item/tool/call") {
+      requestId = ApprovalRequestId.makeUnsafe(randomUUID());
+      context.pendingToolCalls.set(requestId, {
+        requestId,
+        jsonRpcId: request.id,
+        threadId: context.session.threadId,
+        ...(route.turnId ? { turnId: route.turnId } : {}),
+        ...(route.itemId ? { itemId: route.itemId } : {}),
+      });
+    }
+
     this.emitEvent({
       id: EventId.makeUnsafe(randomUUID()),
       kind: "request",
@@ -1235,6 +1292,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     if (request.method === "item/tool/requestUserInput") {
+      return;
+    }
+
+    if (request.method === "item/tool/call") {
       return;
     }
 

@@ -18,6 +18,7 @@ import { OrchestrationProjectionPipelineLive } from "./orchestration/Layers/Proj
 import { OrchestrationProjectionSnapshotQueryLive } from "./orchestration/Layers/ProjectionSnapshotQuery";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus";
+import { ThreadDelegationCoordinatorLive } from "./orchestration/Layers/ThreadDelegationCoordinator";
 import { ProviderUnsupportedError } from "./provider/Errors";
 import { makeCodexAdapterLive } from "./provider/Layers/CodexAdapter";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry";
@@ -101,10 +102,15 @@ export function makeServerRuntimeServicesLayer() {
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
+  const threadDelegationCoordinatorLayer = ThreadDelegationCoordinatorLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(gitCoreLayer),
+  );
   const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
     Layer.provideMerge(runtimeIngestionLayer),
     Layer.provideMerge(providerCommandReactorLayer),
     Layer.provideMerge(checkpointReactorLayer),
+    Layer.provideMerge(threadDelegationCoordinatorLayer),
   );
 
   const terminalLayer = TerminalManagerLive.pipe(

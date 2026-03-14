@@ -117,6 +117,13 @@ export const ProviderRespondToUserInputInput = Schema.Struct({
 });
 export type ProviderRespondToUserInputInput = typeof ProviderRespondToUserInputInput.Type;
 
+export const ProviderResolveToolCallInput = Schema.Struct({
+  threadId: ThreadId,
+  requestId: ApprovalRequestId,
+  result: Schema.Unknown,
+});
+export type ProviderResolveToolCallInput = typeof ProviderResolveToolCallInput.Type;
+
 const ProviderEventKind = Schema.Literals(["session", "notification", "request", "error"]);
 
 export const ProviderEvent = Schema.Struct({

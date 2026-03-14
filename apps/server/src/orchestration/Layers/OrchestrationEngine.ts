@@ -41,6 +41,14 @@ function commandToAggregateRef(command: OrchestrationCommand): {
         aggregateKind: "project",
         aggregateId: command.projectId,
       };
+    case "thread.delegation.spawn.materialized":
+    case "thread.delegation.child-status.set":
+    case "thread.delegation.child-result.record":
+    case "thread.delegation.batch.complete":
+      return {
+        aggregateKind: "thread",
+        aggregateId: command.parentThreadId,
+      };
     default:
       return {
         aggregateKind: "thread",

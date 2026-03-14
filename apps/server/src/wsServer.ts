@@ -78,6 +78,7 @@ import { expandHomePath } from "./os-jank.ts";
 import { makeServerPushBus } from "./wsServer/pushBus.ts";
 import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@t3tools/shared/schemaJson";
+import { materializeSemanticThreadFork } from "./orchestration/threadForking.ts";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -329,6 +330,26 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         ...input.command,
         workspaceRoot: yield* normalizeProjectWorkspaceRoot(input.command.workspaceRoot),
       } satisfies OrchestrationCommand;
+    }
+
+    if (input.command.type === "thread.fork.semantic") {
+      return yield* materializeSemanticThreadFork({
+        readModel: yield* projectionReadModelQuery.getSnapshot(),
+        sourceThreadId: input.command.sourceThreadId,
+        destinationThreadId: input.command.threadId,
+        commandId: input.command.commandId,
+        createdAt: input.command.createdAt,
+        stateDir: serverConfig.stateDir,
+        fileSystem,
+        path,
+      }).pipe(
+        Effect.mapError(
+          (error) =>
+            new RouteRequestError({
+              message: error.message,
+            }),
+        ),
+      );
     }
 
     if (input.command.type !== "thread.turn.start") {

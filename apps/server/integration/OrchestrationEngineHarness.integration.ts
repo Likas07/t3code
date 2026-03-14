@@ -60,6 +60,7 @@ import {
   RuntimeReceiptBus,
   type OrchestrationRuntimeReceipt,
 } from "../src/orchestration/Services/RuntimeReceiptBus.ts";
+import { ThreadDelegationCoordinator } from "../src/orchestration/Services/ThreadDelegationCoordinator.ts";
 
 import {
   makeTestProviderAdapterHarness,
@@ -308,6 +309,11 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(runtimeIngestionLayer),
       Layer.provideMerge(providerCommandReactorLayer),
       Layer.provideMerge(checkpointReactorLayer),
+      Layer.provideMerge(
+        Layer.succeed(ThreadDelegationCoordinator, {
+          start: Effect.void,
+        }),
+      ),
     );
     const layer = orchestrationReactorLayer.pipe(
       Layer.provide(persistenceLayer),

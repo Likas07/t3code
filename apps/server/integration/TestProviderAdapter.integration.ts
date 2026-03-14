@@ -481,6 +481,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
       interruptTurn,
       respondToRequest,
       respondToUserInput,
+      resolveToolCall: () => Effect.void,
       stopSession,
       listSessions,
       hasSession,

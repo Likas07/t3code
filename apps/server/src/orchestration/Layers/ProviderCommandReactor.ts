@@ -3,6 +3,7 @@ import {
   CommandId,
   EventId,
   type OrchestrationEvent,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProviderModelOptions,
   type ProviderKind,
   type ProviderStartOptions,
@@ -12,8 +13,9 @@ import {
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
-import { Cache, Cause, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { buildBootstrapInput } from "@t3tools/shared/historyBootstrap";
+import { Cache, Cause, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -461,9 +463,31 @@ const make = Effect.gen(function* () {
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
     }).pipe(Effect.forkScoped);
 
+    const providerMessageText =
+      thread.fork?.kind === "semantic" && thread.fork.bootstrapStatus === "pending"
+        ? buildBootstrapInput(
+            thread.messages
+              .filter((entry) => entry.origin === "fork-import")
+              .map((entry) =>
+                entry.attachments !== undefined
+                  ? {
+                      role: entry.role,
+                      text: entry.text,
+                      attachments: entry.attachments,
+                    }
+                  : {
+                      role: entry.role,
+                      text: entry.text,
+                    },
+              ),
+            message.text,
+            PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+          ).text
+        : message.text;
+
     yield* sendTurnForThread({
       threadId: event.payload.threadId,
-      messageText: message.text,
+      messageText: providerMessageText,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
       ...(event.payload.provider !== undefined ? { provider: event.payload.provider } : {}),
       ...(event.payload.model !== undefined ? { model: event.payload.model } : {}),
@@ -476,6 +500,16 @@ const make = Effect.gen(function* () {
       interactionMode: event.payload.interactionMode,
       createdAt: event.payload.createdAt,
     });
+
+    if (thread.fork?.kind === "semantic" && thread.fork.bootstrapStatus === "pending") {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.fork.bootstrap.complete",
+        commandId: serverCommandId("thread-fork-bootstrap-complete"),
+        threadId: event.payload.threadId,
+        bootstrappedAt: event.payload.createdAt,
+        createdAt: event.payload.createdAt,
+      });
+    }
   });
 
   const processTurnInterruptRequested = Effect.fnUntraced(function* (

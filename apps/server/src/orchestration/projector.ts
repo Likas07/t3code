@@ -14,6 +14,12 @@ import {
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
   ThreadActivityAppendedPayload,
+  ThreadDelegationBatchCompletedPayload,
+  ThreadDelegationBatchCreatedPayload,
+  ThreadDelegationChildLinkedPayload,
+  ThreadDelegationChildResultRecordedPayload,
+  ThreadDelegationChildStatusSetPayload,
+  ThreadForkBootstrapCompletedPayload,
   ThreadCreatedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
@@ -43,6 +49,21 @@ function updateThread(
   return threads.map((thread) => (thread.id === threadId ? { ...thread, ...patch } : thread));
 }
 
+function mapDelegationBatch(
+  thread: OrchestrationThread,
+  batchId: string,
+  updater: (
+    batch: NonNullable<OrchestrationThread["delegationBatches"]>[number],
+  ) => NonNullable<OrchestrationThread["delegationBatches"]>[number],
+): OrchestrationThread {
+  return {
+    ...thread,
+    delegationBatches: thread.delegationBatches.map((batch) =>
+      batch.batchId === batchId ? updater(batch) : batch,
+    ),
+  };
+}
+
 function decodeForEvent<A>(
   schema: Schema.Schema<A>,
   value: unknown,
@@ -63,6 +84,10 @@ function retainThreadMessagesAfterRevert(
   const retainedMessageIds = new Set<string>();
   for (const message of messages) {
     if (message.role === "system") {
+      retainedMessageIds.add(message.id);
+      continue;
+    }
+    if (message.origin === "fork-import") {
       retainedMessageIds.add(message.id);
       continue;
     }
@@ -258,10 +283,14 @@ export function projectEvent(
             branch: payload.branch,
             worktreePath: payload.worktreePath,
             latestTurn: null,
+            fork: payload.fork,
+            lineage: payload.lineage,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
             messages: [],
+            delegationBatches: [],
+            proposedPlans: [],
             activities: [],
             checkpoints: [],
             session: null,
@@ -286,6 +315,187 @@ export function projectEvent(
             deletedAt: payload.deletedAt,
             updatedAt: payload.deletedAt,
           }),
+        })),
+      );
+
+    case "thread.fork-bootstrap-completed":
+      return decodeForEvent(
+        ThreadForkBootstrapCompletedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: nextBase.threads.map((thread) =>
+            thread.id !== payload.threadId
+              ? thread
+              : {
+                  ...thread,
+                  fork:
+                    thread.fork === null
+                      ? null
+                      : {
+                          ...thread.fork,
+                          bootstrapStatus: "completed",
+                          bootstrappedAt: payload.bootstrappedAt,
+                        },
+                  updatedAt: event.occurredAt,
+                },
+          ),
+        })),
+      );
+
+    case "thread.delegation-batch-created":
+      return decodeForEvent(
+        ThreadDelegationBatchCreatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: nextBase.threads.map((thread) =>
+            thread.id !== payload.parentThreadId
+              ? thread
+              : {
+                  ...thread,
+                  delegationBatches: [
+                    ...thread.delegationBatches.filter((batch) => batch.batchId !== payload.batchId),
+                    {
+                      batchId: payload.batchId,
+                      parentThreadId: payload.parentThreadId,
+                      parentTurnId: payload.parentTurnId,
+                      workspaceMode: payload.workspaceMode,
+                      concurrencyLimit: payload.concurrencyLimit,
+                      status: payload.status,
+                      createdAt: payload.createdAt,
+                      updatedAt: payload.updatedAt,
+                      completedAt: payload.completedAt,
+                      children: [],
+                    },
+                  ],
+                  updatedAt: event.occurredAt,
+                },
+          ),
+        })),
+      );
+
+    case "thread.delegation-child-linked":
+      return decodeForEvent(
+        ThreadDelegationChildLinkedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: nextBase.threads.map((thread) =>
+            thread.id !== payload.parentThreadId
+              ? thread
+              : mapDelegationBatch(thread, payload.batchId, (batch) => ({
+                  ...batch,
+                  children: [
+                    ...batch.children.filter(
+                      (child) => child.childThreadId !== payload.child.childThreadId,
+                    ),
+                    payload.child,
+                  ].toSorted(
+                    (left, right) =>
+                      left.taskIndex - right.taskIndex ||
+                      left.childThreadId.localeCompare(right.childThreadId),
+                  ),
+                  updatedAt: event.occurredAt,
+                })),
+          ),
+        })),
+      );
+
+    case "thread.delegation-child-status-set":
+      return decodeForEvent(
+        ThreadDelegationChildStatusSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: nextBase.threads.map((thread) =>
+            thread.id !== payload.parentThreadId
+              ? thread
+              : mapDelegationBatch(thread, payload.batchId, (batch) => ({
+                  ...batch,
+                  updatedAt: payload.updatedAt,
+                  children: batch.children.map((child) =>
+                    child.childThreadId !== payload.childThreadId
+                      ? child
+                      : {
+                          ...child,
+                          status: payload.status,
+                          blockingRequestId: payload.blockingRequestId,
+                          blockingKind: payload.blockingKind,
+                          startedAt:
+                            child.startedAt ?? (payload.status === "running" ? payload.updatedAt : null),
+                        },
+                  ),
+                })),
+          ),
+        })),
+      );
+
+    case "thread.delegation-child-result-recorded":
+      return decodeForEvent(
+        ThreadDelegationChildResultRecordedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: nextBase.threads.map((thread) =>
+            thread.id !== payload.parentThreadId
+              ? thread
+              : mapDelegationBatch(thread, payload.batchId, (batch) => ({
+                  ...batch,
+                  updatedAt: payload.completedAt,
+                  children: batch.children.map((child) =>
+                    child.childThreadId !== payload.childThreadId
+                      ? child
+                      : {
+                          ...child,
+                          status: payload.status,
+                          summary: payload.summary,
+                          error: payload.error,
+                          completedAt: payload.completedAt,
+                          blockingRequestId: null,
+                          blockingKind: null,
+                          startedAt: child.startedAt ?? payload.completedAt,
+                        },
+                  ),
+                })),
+          ),
+        })),
+      );
+
+    case "thread.delegation-batch-completed":
+      return decodeForEvent(
+        ThreadDelegationBatchCompletedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: nextBase.threads.map((thread) =>
+            thread.id !== payload.parentThreadId
+              ? thread
+              : mapDelegationBatch(thread, payload.batchId, (batch) => ({
+                  ...batch,
+                  status: payload.status,
+                  completedAt: payload.completedAt,
+                  updatedAt: payload.completedAt,
+                })),
+          ),
         })),
       );
 
@@ -351,6 +561,7 @@ export function projectEvent(
             text: payload.text,
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
             turnId: payload.turnId,
+            origin: payload.origin,
             streaming: payload.streaming,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -373,6 +584,7 @@ export function projectEvent(
                     streaming: message.streaming,
                     updatedAt: message.updatedAt,
                     turnId: message.turnId,
+                    origin: message.origin,
                     ...(message.attachments !== undefined
                       ? { attachments: message.attachments }
                       : {}),

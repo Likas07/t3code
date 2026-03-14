@@ -23,6 +23,15 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     latestTurn: null,
     branch: null,
     worktreePath: null,
+    lineage: {
+      rootThreadId: ThreadId.makeUnsafe("thread-1"),
+      parentThreadId: null,
+      delegationDepth: 0,
+      role: "primary",
+      parentBatchId: null,
+      parentTaskIndex: null,
+    },
+    delegationBatches: [],
     ...overrides,
   };
 }

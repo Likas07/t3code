@@ -13,6 +13,8 @@ import {
   resolveModelSlugForProvider,
 } from "@t3tools/shared/model";
 import { create } from "zustand";
+
+import { resolveBrowserServerOrigin } from "./serverUrls";
 import { type ChatMessage, type Project, type Thread } from "./types";
 import { Debouncer } from "@tanstack/react-pacer";
 
@@ -211,30 +213,9 @@ function inferProviderForThreadModel(input: {
   return "codex";
 }
 
-function resolveWsHttpOrigin(): string {
-  if (typeof window === "undefined") return "";
-  const bridgeWsUrl = window.desktopBridge?.getWsUrl?.();
-  const envWsUrl = import.meta.env.VITE_WS_URL as string | undefined;
-  const wsCandidate =
-    typeof bridgeWsUrl === "string" && bridgeWsUrl.length > 0
-      ? bridgeWsUrl
-      : typeof envWsUrl === "string" && envWsUrl.length > 0
-        ? envWsUrl
-        : null;
-  if (!wsCandidate) return window.location.origin;
-  try {
-    const wsUrl = new URL(wsCandidate);
-    const protocol =
-      wsUrl.protocol === "wss:" ? "https:" : wsUrl.protocol === "ws:" ? "http:" : wsUrl.protocol;
-    return `${protocol}//${wsUrl.host}`;
-  } catch {
-    return window.location.origin;
-  }
-}
-
 function toAttachmentPreviewUrl(rawUrl: string): string {
   if (rawUrl.startsWith("/")) {
-    return `${resolveWsHttpOrigin()}${rawUrl}`;
+    return `${resolveBrowserServerOrigin()}${rawUrl}`;
   }
   return rawUrl;
 }
@@ -313,6 +294,11 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         lastVisitedAt: existing?.lastVisitedAt ?? thread.updatedAt,
         branch: thread.branch,
         worktreePath: thread.worktreePath,
+        lineage: { ...thread.lineage },
+        delegationBatches: thread.delegationBatches.map((batch) => ({
+          ...batch,
+          children: batch.children.map((child) => ({ ...child })),
+        })),
         turnDiffSummaries: thread.checkpoints.map((checkpoint) => ({
           turnId: checkpoint.turnId,
           completedAt: checkpoint.completedAt,

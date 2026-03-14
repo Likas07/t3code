@@ -30,6 +30,8 @@ import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheck
 import { ProjectionProject } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionState } from "../../persistence/Services/ProjectionState.ts";
 import { ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
+import { ProjectionThreadDelegationBatch } from "../../persistence/Services/ProjectionThreadDelegationBatches.ts";
+import { ProjectionThreadDelegationChild } from "../../persistence/Services/ProjectionThreadDelegationChildren.ts";
 import { ProjectionThreadMessage } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlan } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
@@ -54,6 +56,8 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread;
+const ProjectionThreadDelegationBatchDbRowSchema = ProjectionThreadDelegationBatch;
+const ProjectionThreadDelegationChildDbRowSchema = ProjectionThreadDelegationChild;
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
   Struct.assign({
     payload: Schema.fromJsonString(Schema.Unknown),
@@ -81,6 +85,8 @@ const REQUIRED_SNAPSHOT_PROJECTORS = [
   ORCHESTRATION_PROJECTOR_NAMES.projects,
   ORCHESTRATION_PROJECTOR_NAMES.threads,
   ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
+  ORCHESTRATION_PROJECTOR_NAMES.threadDelegationBatches,
+  ORCHESTRATION_PROJECTOR_NAMES.threadDelegationChildren,
   ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
   ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
   ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
@@ -162,11 +168,70 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
+          fork_kind AS "forkKind",
+          fork_source_thread_id AS "forkSourceThreadId",
+          fork_bootstrap_status AS "forkBootstrapStatus",
+          fork_imported_message_count AS "forkImportedMessageCount",
+          fork_created_at AS "forkCreatedAt",
+          fork_bootstrapped_at AS "forkBootstrappedAt",
+          root_thread_id AS "rootThreadId",
+          parent_thread_id AS "parentThreadId",
+          delegation_depth AS "delegationDepth",
+          delegation_role AS "delegationRole",
+          parent_batch_id AS "parentBatchId",
+          parent_task_index AS "parentTaskIndex",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
+      `,
+  });
+
+  const listThreadDelegationBatchRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadDelegationBatchDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          batch_id AS "batchId",
+          parent_thread_id AS "parentThreadId",
+          parent_turn_id AS "parentTurnId",
+          workspace_mode AS "workspaceMode",
+          concurrency_limit AS "concurrencyLimit",
+          status,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          completed_at AS "completedAt"
+        FROM projection_thread_delegation_batches
+        ORDER BY parent_thread_id ASC, created_at ASC, batch_id ASC
+      `,
+  });
+
+  const listThreadDelegationChildRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadDelegationChildDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          batch_id AS "batchId",
+          parent_thread_id AS "parentThreadId",
+          child_thread_id AS "childThreadId",
+          task_index AS "taskIndex",
+          title,
+          prompt,
+          status,
+          branch,
+          worktree_path AS "worktreePath",
+          started_at AS "startedAt",
+          completed_at AS "completedAt",
+          summary,
+          error,
+          blocking_request_id AS "blockingRequestId",
+          blocking_kind AS "blockingKind",
+          updated_at AS "updatedAt"
+        FROM projection_thread_delegation_children
+        ORDER BY parent_thread_id ASC, batch_id ASC, task_index ASC, child_thread_id ASC
       `,
   });
 
@@ -182,6 +247,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          origin,
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -312,6 +378,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             projectRows,
             threadRows,
             messageRows,
+            delegationBatchRows,
+            delegationChildRows,
             proposedPlanRows,
             activityRows,
             sessionRows,
@@ -340,6 +408,22 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 toPersistenceSqlOrDecodeError(
                   "ProjectionSnapshotQuery.getSnapshot:listThreadMessages:query",
                   "ProjectionSnapshotQuery.getSnapshot:listThreadMessages:decodeRows",
+                ),
+              ),
+            ),
+            listThreadDelegationBatchRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getSnapshot:listThreadDelegationBatches:query",
+                  "ProjectionSnapshotQuery.getSnapshot:listThreadDelegationBatches:decodeRows",
+                ),
+              ),
+            ),
+            listThreadDelegationChildRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getSnapshot:listThreadDelegationChildren:query",
+                  "ProjectionSnapshotQuery.getSnapshot:listThreadDelegationChildren:decodeRows",
                 ),
               ),
             ),
@@ -394,6 +478,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ]);
 
           const messagesByThread = new Map<string, Array<OrchestrationMessage>>();
+          const delegationBatchesByThread = new Map<
+            string,
+            Array<Schema.Schema.Type<typeof ProjectionThreadDelegationBatchDbRowSchema>>
+          >();
+          const delegationChildrenByBatch = new Map<
+            string,
+            Array<Schema.Schema.Type<typeof ProjectionThreadDelegationChildDbRowSchema>>
+          >();
           const proposedPlansByThread = new Map<string, Array<OrchestrationProposedPlan>>();
           const activitiesByThread = new Map<string, Array<OrchestrationThreadActivity>>();
           const checkpointsByThread = new Map<string, Array<OrchestrationCheckpointSummary>>();
@@ -421,11 +513,26 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               text: row.text,
               ...(row.attachments !== null ? { attachments: row.attachments } : {}),
               turnId: row.turnId,
+              origin: row.origin,
               streaming: row.isStreaming === 1,
               createdAt: row.createdAt,
               updatedAt: row.updatedAt,
             });
             messagesByThread.set(row.threadId, threadMessages);
+          }
+
+          for (const row of delegationBatchRows) {
+            updatedAt = maxIso(updatedAt, row.updatedAt);
+            const threadBatches = delegationBatchesByThread.get(row.parentThreadId) ?? [];
+            threadBatches.push(row);
+            delegationBatchesByThread.set(row.parentThreadId, threadBatches);
+          }
+
+          for (const row of delegationChildRows) {
+            updatedAt = maxIso(updatedAt, row.updatedAt);
+            const batchChildren = delegationChildrenByBatch.get(row.batchId) ?? [];
+            batchChildren.push(row);
+            delegationChildrenByBatch.set(row.batchId, batchChildren);
           }
 
           for (const row of proposedPlanRows) {
@@ -534,10 +641,59 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             branch: row.branch,
             worktreePath: row.worktreePath,
             latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+            fork:
+              row.forkKind === null ||
+              row.forkSourceThreadId === null ||
+              row.forkBootstrapStatus === null ||
+              row.forkImportedMessageCount === null ||
+              row.forkCreatedAt === null
+                ? null
+                : {
+                    kind: row.forkKind,
+                    sourceThreadId: row.forkSourceThreadId,
+                    bootstrapStatus: row.forkBootstrapStatus,
+                    importedMessageCount: row.forkImportedMessageCount,
+                    createdAt: row.forkCreatedAt,
+                    bootstrappedAt: row.forkBootstrappedAt,
+                  },
+            lineage: {
+              rootThreadId: row.rootThreadId,
+              parentThreadId: row.parentThreadId,
+              delegationDepth: row.delegationDepth,
+              role: row.delegationRole,
+              parentBatchId: row.parentBatchId,
+              parentTaskIndex: row.parentTaskIndex,
+            },
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,
             deletedAt: row.deletedAt,
             messages: messagesByThread.get(row.threadId) ?? [],
+            delegationBatches: (delegationBatchesByThread.get(row.threadId) ?? []).map((batch) => ({
+              batchId: batch.batchId,
+              parentThreadId: batch.parentThreadId,
+              parentTurnId: batch.parentTurnId,
+              workspaceMode: batch.workspaceMode,
+              concurrencyLimit: batch.concurrencyLimit,
+              status: batch.status,
+              createdAt: batch.createdAt,
+              updatedAt: batch.updatedAt,
+              completedAt: batch.completedAt,
+              children: (delegationChildrenByBatch.get(batch.batchId) ?? []).map((child) => ({
+                childThreadId: child.childThreadId,
+                taskIndex: child.taskIndex,
+                title: child.title,
+                prompt: child.prompt,
+                status: child.status,
+                branch: child.branch,
+                worktreePath: child.worktreePath,
+                startedAt: child.startedAt,
+                completedAt: child.completedAt,
+                summary: child.summary,
+                error: child.error,
+                blockingRequestId: child.blockingRequestId,
+                blockingKind: child.blockingKind,
+              })),
+            })),
             proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
             activities: activitiesByThread.get(row.threadId) ?? [],
             checkpoints: checkpointsByThread.get(row.threadId) ?? [],

@@ -31,6 +31,10 @@
     "./schemaJson": {
       "types": "./src/schemaJson.ts",
       "import": "./src/schemaJson.ts"
+    },
+    "./historyBootstrap": {
+      "types": "./src/historyBootstrap.ts",
+      "import": "./src/historyBootstrap.ts"
     }
   },
   "scripts": {

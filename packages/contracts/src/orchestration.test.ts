@@ -5,8 +5,11 @@ import { Effect, Schema } from "effect";
 import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  ClientOrchestrationCommand,
+  OrchestrationThread,
   OrchestrationGetTurnDiffInput,
   OrchestrationSession,
+  OrchestrationMessage,
   ProjectCreateCommand,
   ThreadTurnStartCommand,
   ThreadCreatedPayload,
@@ -23,6 +26,9 @@ const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
 );
 const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSession);
 const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPayload);
+const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
+const decodeOrchestrationMessage = Schema.decodeUnknownEffect(OrchestrationMessage);
+const decodeOrchestrationThread = Schema.decodeUnknownEffect(OrchestrationThread);
 
 it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
   Effect.gen(function* () {
@@ -155,6 +161,99 @@ it.effect("decodes thread.created runtime mode for historical events", () =>
     });
 
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
+    assert.strictEqual(parsed.fork, null);
+  }),
+);
+
+it.effect("decodes thread.fork.semantic client commands", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeClientOrchestrationCommand({
+      type: "thread.fork.semantic",
+      commandId: "cmd-fork-1",
+      sourceThreadId: "thread-source",
+      threadId: "thread-fork",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.type, "thread.fork.semantic");
+    assert.strictEqual(parsed.sourceThreadId, "thread-source");
+    assert.strictEqual(parsed.threadId, "thread-fork");
+  }),
+);
+
+it.effect("defaults message origin to native for historical reads", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationMessage({
+      id: "msg-1",
+      role: "assistant",
+      text: "hello",
+      turnId: null,
+      streaming: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.origin, "native");
+  }),
+);
+
+it.effect("defaults thread lineage and delegation batches for historical reads", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationThread({
+      id: "thread-1",
+      projectId: "project-1",
+      title: "Thread",
+      model: "gpt-5.3-codex",
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      latestTurn: null,
+      fork: null,
+      createdAt: "2026-03-12T00:00:00.000Z",
+      updatedAt: "2026-03-12T00:00:00.000Z",
+      deletedAt: null,
+      messages: [],
+      activities: [],
+      proposedPlans: [],
+      checkpoints: [],
+      session: null,
+    });
+
+    assert.deepStrictEqual(parsed.lineage, {
+      rootThreadId: "thread-1",
+      parentThreadId: null,
+      delegationDepth: 0,
+      role: "primary",
+      parentBatchId: null,
+      parentTaskIndex: null,
+    });
+    assert.deepStrictEqual(parsed.delegationBatches, []);
+  }),
+);
+
+it.effect("decodes thread.created lineage defaults for historical events", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadCreatedPayload({
+      threadId: "thread-1",
+      projectId: "project-1",
+      title: "Thread title",
+      model: "gpt-5.4",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.deepStrictEqual(parsed.lineage, {
+      rootThreadId: "thread-1",
+      parentThreadId: null,
+      delegationDepth: 0,
+      role: "primary",
+      parentBatchId: null,
+      parentTaskIndex: null,
+    });
   }),
 );
 

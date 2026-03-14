@@ -1,4 +1,4 @@
-import { Option, Schema, SchemaIssue, Struct } from "effect";
+import { Effect, Option, Schema, SchemaIssue, SchemaTransformation, Struct } from "effect";
 import { ProviderModelOptions } from "./model";
 import {
   ApprovalRequestId,
@@ -143,6 +143,8 @@ export type OrchestrationProject = typeof OrchestrationProject.Type;
 
 export const OrchestrationMessageRole = Schema.Literals(["user", "assistant", "system"]);
 export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
+export const OrchestrationMessageOrigin = Schema.Literals(["native", "fork-import"]);
+export type OrchestrationMessageOrigin = typeof OrchestrationMessageOrigin.Type;
 
 export const OrchestrationMessage = Schema.Struct({
   id: MessageId,
@@ -150,6 +152,7 @@ export const OrchestrationMessage = Schema.Struct({
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   turnId: Schema.NullOr(TurnId),
+  origin: OrchestrationMessageOrigin.pipe(Schema.withDecodingDefault(() => "native")),
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -249,8 +252,99 @@ export const OrchestrationLatestTurn = Schema.Struct({
   assistantMessageId: Schema.NullOr(MessageId),
 });
 export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
+export const OrchestrationThreadForkKind = Schema.Literal("semantic");
+export type OrchestrationThreadForkKind = typeof OrchestrationThreadForkKind.Type;
+export const OrchestrationThreadForkBootstrapStatus = Schema.Literals(["pending", "completed"]);
+export type OrchestrationThreadForkBootstrapStatus =
+  typeof OrchestrationThreadForkBootstrapStatus.Type;
+export const OrchestrationThreadFork = Schema.Struct({
+  kind: OrchestrationThreadForkKind,
+  sourceThreadId: ThreadId,
+  bootstrapStatus: OrchestrationThreadForkBootstrapStatus,
+  importedMessageCount: NonNegativeInt,
+  createdAt: IsoDateTime,
+  bootstrappedAt: Schema.NullOr(IsoDateTime),
+});
+export type OrchestrationThreadFork = typeof OrchestrationThreadFork.Type;
 
-export const OrchestrationThread = Schema.Struct({
+export const OrchestrationThreadLineageRole = Schema.Literals(["primary", "child"]);
+export type OrchestrationThreadLineageRole = typeof OrchestrationThreadLineageRole.Type;
+export const OrchestrationThreadLineage = Schema.Struct({
+  rootThreadId: ThreadId,
+  parentThreadId: Schema.NullOr(ThreadId),
+  delegationDepth: NonNegativeInt,
+  role: OrchestrationThreadLineageRole,
+  parentBatchId: Schema.NullOr(TrimmedNonEmptyString),
+  parentTaskIndex: Schema.NullOr(NonNegativeInt),
+});
+export type OrchestrationThreadLineage = typeof OrchestrationThreadLineage.Type;
+
+export const DelegationWorkspaceMode = Schema.Literals(["same-worktree", "separate-worktree"]);
+export type DelegationWorkspaceMode = typeof DelegationWorkspaceMode.Type;
+export const DelegationBatchStatus = Schema.Literals([
+  "running",
+  "completed",
+  "completed_with_failures",
+  "failed",
+]);
+export type DelegationBatchStatus = typeof DelegationBatchStatus.Type;
+export const DelegationChildStatus = Schema.Literals([
+  "queued",
+  "running",
+  "blocked",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+export type DelegationChildStatus = typeof DelegationChildStatus.Type;
+export const DelegationChildBlockingKind = Schema.NullOr(
+  Schema.Literals(["approval", "user-input"]),
+);
+export type DelegationChildBlockingKind = typeof DelegationChildBlockingKind.Type;
+
+export const OrchestrationDelegationChild = Schema.Struct({
+  childThreadId: ThreadId,
+  taskIndex: NonNegativeInt,
+  title: TrimmedNonEmptyString,
+  prompt: TrimmedNonEmptyString,
+  status: DelegationChildStatus,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  startedAt: Schema.NullOr(IsoDateTime),
+  completedAt: Schema.NullOr(IsoDateTime),
+  summary: Schema.NullOr(Schema.String),
+  error: Schema.NullOr(Schema.String),
+  blockingRequestId: Schema.NullOr(ApprovalRequestId),
+  blockingKind: DelegationChildBlockingKind,
+});
+export type OrchestrationDelegationChild = typeof OrchestrationDelegationChild.Type;
+
+export const OrchestrationDelegationBatch = Schema.Struct({
+  batchId: TrimmedNonEmptyString,
+  parentThreadId: ThreadId,
+  parentTurnId: Schema.NullOr(TurnId),
+  workspaceMode: DelegationWorkspaceMode,
+  concurrencyLimit: NonNegativeInt,
+  status: DelegationBatchStatus,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  completedAt: Schema.NullOr(IsoDateTime),
+  children: Schema.Array(OrchestrationDelegationChild),
+});
+export type OrchestrationDelegationBatch = typeof OrchestrationDelegationBatch.Type;
+
+function defaultPrimaryLineage(threadId: ThreadId): OrchestrationThreadLineage {
+  return {
+    rootThreadId: threadId,
+    parentThreadId: null,
+    delegationDepth: 0,
+    role: "primary",
+    parentBatchId: null,
+    parentTaskIndex: null,
+  };
+}
+
+const RawOrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -262,15 +356,39 @@ export const OrchestrationThread = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
+  fork: Schema.NullOr(OrchestrationThreadFork).pipe(Schema.withDecodingDefault(() => null)),
+  lineage: Schema.optional(OrchestrationThreadLineage),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
   messages: Schema.Array(OrchestrationMessage),
-  proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(Schema.withDecodingDefault(() => [])),
+  delegationBatches: Schema.optional(Schema.Array(OrchestrationDelegationBatch)),
+  proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
 });
+const NormalizedOrchestrationThread = Schema.Struct({
+  ...RawOrchestrationThread.fields,
+  lineage: OrchestrationThreadLineage,
+  delegationBatches: Schema.Array(OrchestrationDelegationBatch),
+});
+export const OrchestrationThread = RawOrchestrationThread.pipe(
+  Schema.decodeTo(
+    Schema.toType(NormalizedOrchestrationThread),
+    SchemaTransformation.transformOrFail({
+      decode: (thread) =>
+        Effect.succeed({
+          ...thread,
+          lineage: thread.lineage ?? defaultPrimaryLineage(thread.id),
+          delegationBatches: thread.delegationBatches ?? [],
+        }),
+      encode: (thread) => Effect.succeed(thread),
+    }),
+  ),
+);
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
 export const OrchestrationReadModel = Schema.Struct({
@@ -327,6 +445,14 @@ const ThreadDeleteCommand = Schema.Struct({
   type: Schema.Literal("thread.delete"),
   commandId: CommandId,
   threadId: ThreadId,
+});
+
+const ThreadForkSemanticCommand = Schema.Struct({
+  type: Schema.Literal("thread.fork.semantic"),
+  commandId: CommandId,
+  sourceThreadId: ThreadId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
 });
 
 const ThreadMetaUpdateCommand = Schema.Struct({
@@ -444,6 +570,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectDeleteCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
+  ThreadForkSemanticCommand,
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
@@ -463,6 +590,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ProjectDeleteCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
+  ThreadForkSemanticCommand,
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
@@ -480,6 +608,49 @@ const ThreadSessionSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   session: OrchestrationSession,
+  createdAt: IsoDateTime,
+});
+
+const ThreadForkSemanticMaterializedMessage = Schema.Struct({
+  messageId: MessageId,
+  role: OrchestrationMessageRole,
+  text: Schema.String,
+  attachments: Schema.Array(ChatAttachment),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
+const ThreadDelegationMaterializedChild = Schema.Struct({
+  threadId: ThreadId,
+  title: TrimmedNonEmptyString,
+  prompt: TrimmedNonEmptyString,
+  model: TrimmedNonEmptyString,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
+  ),
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  forkSourceThreadId: ThreadId,
+  createdAt: IsoDateTime,
+  messages: Schema.Array(ThreadForkSemanticMaterializedMessage),
+});
+
+const ThreadForkSemanticMaterializedCommand = Schema.Struct({
+  type: Schema.Literal("thread.fork.semantic.materialized"),
+  commandId: CommandId,
+  sourceThreadId: ThreadId,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  model: TrimmedNonEmptyString,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
+  ),
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  messages: Schema.Array(ThreadForkSemanticMaterializedMessage),
   createdAt: IsoDateTime,
 });
 
@@ -540,14 +711,76 @@ const ThreadRevertCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadForkBootstrapCompleteCommand = Schema.Struct({
+  type: Schema.Literal("thread.fork.bootstrap.complete"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  bootstrappedAt: IsoDateTime,
+  createdAt: IsoDateTime,
+});
+
+const ThreadDelegationSpawnMaterializedCommand = Schema.Struct({
+  type: Schema.Literal("thread.delegation.spawn.materialized"),
+  commandId: CommandId,
+  parentThreadId: ThreadId,
+  batchId: TrimmedNonEmptyString,
+  parentTurnId: Schema.NullOr(TurnId),
+  workspaceMode: DelegationWorkspaceMode,
+  concurrencyLimit: NonNegativeInt,
+  children: Schema.Array(ThreadDelegationMaterializedChild),
+  createdAt: IsoDateTime,
+});
+
+const ThreadDelegationChildStatusSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.delegation.child-status.set"),
+  commandId: CommandId,
+  parentThreadId: ThreadId,
+  batchId: TrimmedNonEmptyString,
+  childThreadId: ThreadId,
+  status: DelegationChildStatus,
+  blockingRequestId: Schema.optional(Schema.NullOr(ApprovalRequestId)),
+  blockingKind: Schema.optional(DelegationChildBlockingKind),
+  updatedAt: IsoDateTime,
+  createdAt: IsoDateTime,
+});
+
+const ThreadDelegationChildResultRecordCommand = Schema.Struct({
+  type: Schema.Literal("thread.delegation.child-result.record"),
+  commandId: CommandId,
+  parentThreadId: ThreadId,
+  batchId: TrimmedNonEmptyString,
+  childThreadId: ThreadId,
+  status: Schema.Literals(["completed", "failed", "cancelled"]),
+  summary: Schema.NullOr(Schema.String),
+  error: Schema.optional(Schema.NullOr(Schema.String)),
+  completedAt: IsoDateTime,
+  createdAt: IsoDateTime,
+});
+
+const ThreadDelegationBatchCompleteCommand = Schema.Struct({
+  type: Schema.Literal("thread.delegation.batch.complete"),
+  commandId: CommandId,
+  parentThreadId: ThreadId,
+  batchId: TrimmedNonEmptyString,
+  status: DelegationBatchStatus,
+  completedAt: IsoDateTime,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
+  ThreadForkSemanticMaterializedCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
+  ThreadForkBootstrapCompleteCommand,
+  ThreadDelegationSpawnMaterializedCommand,
+  ThreadDelegationChildStatusSetCommand,
+  ThreadDelegationChildResultRecordCommand,
+  ThreadDelegationBatchCompleteCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -563,6 +796,12 @@ export const OrchestrationEventType = Schema.Literals([
   "project.deleted",
   "thread.created",
   "thread.deleted",
+  "thread.fork-bootstrap-completed",
+  "thread.delegation-batch-created",
+  "thread.delegation-child-linked",
+  "thread.delegation-child-status-set",
+  "thread.delegation-child-result-recorded",
+  "thread.delegation-batch-completed",
   "thread.meta-updated",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
@@ -609,7 +848,7 @@ export const ProjectDeletedPayload = Schema.Struct({
   deletedAt: IsoDateTime,
 });
 
-export const ThreadCreatedPayload = Schema.Struct({
+const RawThreadCreatedPayload = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -620,13 +859,82 @@ export const ThreadCreatedPayload = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  fork: Schema.NullOr(OrchestrationThreadFork).pipe(Schema.withDecodingDefault(() => null)),
+  lineage: Schema.optional(OrchestrationThreadLineage),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
+const NormalizedThreadCreatedPayload = Schema.Struct({
+  ...RawThreadCreatedPayload.fields,
+  lineage: OrchestrationThreadLineage,
+});
+export const ThreadCreatedPayload = RawThreadCreatedPayload.pipe(
+  Schema.decodeTo(
+    Schema.toType(NormalizedThreadCreatedPayload),
+    SchemaTransformation.transformOrFail({
+      decode: (payload) =>
+        Effect.succeed({
+          ...payload,
+          lineage: payload.lineage ?? defaultPrimaryLineage(payload.threadId),
+        }),
+      encode: (payload) => Effect.succeed(payload),
+    }),
+  ),
+);
 
 export const ThreadDeletedPayload = Schema.Struct({
   threadId: ThreadId,
   deletedAt: IsoDateTime,
+});
+
+export const ThreadForkBootstrapCompletedPayload = Schema.Struct({
+  threadId: ThreadId,
+  bootstrappedAt: IsoDateTime,
+});
+
+export const ThreadDelegationBatchCreatedPayload = Schema.Struct({
+  batchId: TrimmedNonEmptyString,
+  parentThreadId: ThreadId,
+  parentTurnId: Schema.NullOr(TurnId),
+  workspaceMode: DelegationWorkspaceMode,
+  concurrencyLimit: NonNegativeInt,
+  status: DelegationBatchStatus,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  completedAt: Schema.NullOr(IsoDateTime),
+});
+
+export const ThreadDelegationChildLinkedPayload = Schema.Struct({
+  batchId: TrimmedNonEmptyString,
+  parentThreadId: ThreadId,
+  child: OrchestrationDelegationChild,
+});
+
+export const ThreadDelegationChildStatusSetPayload = Schema.Struct({
+  batchId: TrimmedNonEmptyString,
+  parentThreadId: ThreadId,
+  childThreadId: ThreadId,
+  status: DelegationChildStatus,
+  blockingRequestId: Schema.NullOr(ApprovalRequestId),
+  blockingKind: DelegationChildBlockingKind,
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadDelegationChildResultRecordedPayload = Schema.Struct({
+  batchId: TrimmedNonEmptyString,
+  parentThreadId: ThreadId,
+  childThreadId: ThreadId,
+  status: Schema.Literals(["completed", "failed", "cancelled"]),
+  summary: Schema.NullOr(Schema.String),
+  error: Schema.NullOr(Schema.String),
+  completedAt: IsoDateTime,
+});
+
+export const ThreadDelegationBatchCompletedPayload = Schema.Struct({
+  batchId: TrimmedNonEmptyString,
+  parentThreadId: ThreadId,
+  status: DelegationBatchStatus,
+  completedAt: IsoDateTime,
 });
 
 export const ThreadMetaUpdatedPayload = Schema.Struct({
@@ -659,6 +967,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   turnId: Schema.NullOr(TurnId),
+  origin: OrchestrationMessageOrigin.pipe(Schema.withDecodingDefault(() => "native")),
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -790,6 +1099,36 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("thread.fork-bootstrap-completed"),
+    payload: ThreadForkBootstrapCompletedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.delegation-batch-created"),
+    payload: ThreadDelegationBatchCreatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.delegation-child-linked"),
+    payload: ThreadDelegationChildLinkedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.delegation-child-status-set"),
+    payload: ThreadDelegationChildStatusSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.delegation-child-result-recorded"),
+    payload: ThreadDelegationChildResultRecordedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.delegation-batch-completed"),
+    payload: ThreadDelegationBatchCompletedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("thread.meta-updated"),
     payload: ThreadMetaUpdatedPayload,
   }),
@@ -866,6 +1205,139 @@ export const OrchestrationEvent = Schema.Union([
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;
 
+export const OrchestrationPersistedEvent = Schema.Union([
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("project.created"),
+    payload: ProjectCreatedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("project.meta-updated"),
+    payload: ProjectMetaUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("project.deleted"),
+    payload: ProjectDeletedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.created"),
+    payload: ThreadCreatedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.deleted"),
+    payload: ThreadDeletedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.fork-bootstrap-completed"),
+    payload: ThreadForkBootstrapCompletedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.delegation-batch-created"),
+    payload: ThreadDelegationBatchCreatedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.delegation-child-linked"),
+    payload: ThreadDelegationChildLinkedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.delegation-child-status-set"),
+    payload: ThreadDelegationChildStatusSetPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.delegation-child-result-recorded"),
+    payload: ThreadDelegationChildResultRecordedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.delegation-batch-completed"),
+    payload: ThreadDelegationBatchCompletedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.meta-updated"),
+    payload: ThreadMetaUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.runtime-mode-set"),
+    payload: ThreadRuntimeModeSetPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.interaction-mode-set"),
+    payload: ThreadInteractionModeSetPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.message-sent"),
+    payload: ThreadMessageSentPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.turn-start-requested"),
+    payload: ThreadTurnStartRequestedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.turn-interrupt-requested"),
+    payload: ThreadTurnInterruptRequestedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.approval-response-requested"),
+    payload: ThreadApprovalResponseRequestedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.user-input-response-requested"),
+    payload: ThreadUserInputResponseRequestedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.checkpoint-revert-requested"),
+    payload: ThreadCheckpointRevertRequestedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.reverted"),
+    payload: ThreadRevertedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.session-stop-requested"),
+    payload: ThreadSessionStopRequestedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.session-set"),
+    payload: ThreadSessionSetPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.proposed-plan-upserted"),
+    payload: ThreadProposedPlanUpsertedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.turn-diff-completed"),
+    payload: ThreadTurnDiffCompletedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("thread.activity-appended"),
+    payload: ThreadActivityAppendedPayload,
+  }),
+]);
+export type OrchestrationPersistedEvent = typeof OrchestrationPersistedEvent.Type;
 export const OrchestrationCommandReceiptStatus = Schema.Literals(["accepted", "rejected"]);
 export type OrchestrationCommandReceiptStatus = typeof OrchestrationCommandReceiptStatus.Type;
 

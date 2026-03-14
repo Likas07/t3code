@@ -15,6 +15,7 @@ import type {
   ProviderInterruptTurnInput,
   ProviderKind,
   ProviderRespondToRequestInput,
+  ProviderResolveToolCallInput,
   ProviderRespondToUserInputInput,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
@@ -68,6 +69,13 @@ export interface ProviderServiceShape {
    */
   readonly respondToUserInput: (
     input: ProviderRespondToUserInputInput,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Resolve a provider dynamic tool call request.
+   */
+  readonly resolveToolCall: (
+    input: ProviderResolveToolCallInput,
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**

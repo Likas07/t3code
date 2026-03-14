@@ -161,6 +161,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          fork: null,
+          lineage: {
+            rootThreadId: command.threadId,
+            parentThreadId: null,
+            delegationDepth: 0,
+            role: "primary",
+            parentBatchId: null,
+            parentTaskIndex: null,
+          },
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -187,6 +196,233 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           deletedAt: occurredAt,
         },
       };
+    }
+
+    case "thread.fork.semantic.materialized": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.sourceThreadId,
+      });
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+
+      const createdEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.created",
+        payload: {
+          threadId: command.threadId,
+          projectId: command.projectId,
+          title: command.title,
+          model: command.model,
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          branch: command.branch,
+          worktreePath: command.worktreePath,
+          fork: {
+            kind: "semantic",
+            sourceThreadId: command.sourceThreadId,
+            bootstrapStatus: "pending",
+            importedMessageCount: command.messages.length,
+            createdAt: command.createdAt,
+            bootstrappedAt: null,
+          },
+          lineage: {
+            rootThreadId: command.threadId,
+            parentThreadId: null,
+            delegationDepth: 0,
+            role: "primary",
+            parentBatchId: null,
+            parentTaskIndex: null,
+          },
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+
+      const messageEvents: Array<Omit<OrchestrationEvent, "sequence">> = command.messages.map(
+        (message) => ({
+          ...withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: message.updatedAt,
+            commandId: command.commandId,
+          }),
+          causationEventId: createdEvent.eventId,
+          type: "thread.message-sent",
+          payload: {
+            threadId: command.threadId,
+            messageId: message.messageId,
+            role: message.role,
+            text: message.text,
+            attachments: message.attachments,
+            turnId: null,
+            origin: "fork-import" as const,
+            streaming: false,
+            createdAt: message.createdAt,
+            updatedAt: message.updatedAt,
+          },
+        }),
+      );
+
+      return [createdEvent, ...messageEvents];
+    }
+
+    case "thread.delegation.spawn.materialized": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.parentThreadId,
+      });
+      const parentThread = readModel.threads.find((thread) => thread.id === command.parentThreadId);
+      if (!parentThread) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Unknown parent thread: ${command.parentThreadId}`,
+        });
+      }
+      for (const child of command.children) {
+        yield* requireThreadAbsent({
+          readModel,
+          command,
+          threadId: child.threadId,
+        });
+      }
+
+      const batchCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.parentThreadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.delegation-batch-created",
+        payload: {
+          batchId: command.batchId,
+          parentThreadId: command.parentThreadId,
+          parentTurnId: command.parentTurnId,
+          workspaceMode: command.workspaceMode,
+          concurrencyLimit: command.concurrencyLimit,
+          status: "running",
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+          completedAt: null,
+        },
+      };
+
+      const childEvents = command.children.flatMap((child, childIndex) => {
+        const childCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+          ...withEventBase({
+            aggregateKind: "thread",
+            aggregateId: child.threadId,
+            occurredAt: child.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "thread.created",
+          payload: {
+            threadId: child.threadId,
+            projectId: parentThread.projectId,
+            title: child.title,
+            model: child.model,
+            runtimeMode: child.runtimeMode,
+            interactionMode: child.interactionMode,
+            branch: child.branch,
+            worktreePath: child.worktreePath,
+            fork: {
+              kind: "semantic",
+              sourceThreadId: child.forkSourceThreadId,
+              bootstrapStatus: "pending",
+              importedMessageCount: child.messages.length,
+              createdAt: child.createdAt,
+              bootstrappedAt: null,
+            },
+            lineage: {
+              rootThreadId: command.parentThreadId,
+              parentThreadId: command.parentThreadId,
+              delegationDepth: 1,
+              role: "child",
+              parentBatchId: command.batchId,
+              parentTaskIndex: childIndex,
+            },
+            createdAt: child.createdAt,
+            updatedAt: child.createdAt,
+          },
+        };
+
+        const childLinkedEvent: Omit<OrchestrationEvent, "sequence"> = {
+          ...withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.parentThreadId,
+            occurredAt: child.createdAt,
+            commandId: command.commandId,
+          }),
+          causationEventId: batchCreatedEvent.eventId,
+          type: "thread.delegation-child-linked",
+          payload: {
+            batchId: command.batchId,
+            parentThreadId: command.parentThreadId,
+            child: {
+              childThreadId: child.threadId,
+              taskIndex: childIndex,
+              title: child.title,
+              prompt: child.prompt,
+              status: "queued",
+              branch: child.branch,
+              worktreePath: child.worktreePath,
+              startedAt: null,
+              completedAt: null,
+              summary: null,
+              error: null,
+              blockingRequestId: null,
+              blockingKind: null,
+            },
+          },
+        };
+
+        const messageEvents: Array<Omit<OrchestrationEvent, "sequence">> = child.messages.map(
+          (message) => ({
+            ...withEventBase({
+              aggregateKind: "thread",
+              aggregateId: child.threadId,
+              occurredAt: message.updatedAt,
+              commandId: command.commandId,
+            }),
+            causationEventId: childCreatedEvent.eventId,
+            type: "thread.message-sent",
+            payload: {
+              threadId: child.threadId,
+              messageId: message.messageId,
+              role: message.role,
+              text: message.text,
+              attachments: message.attachments,
+              turnId: null,
+              origin: "fork-import" as const,
+              streaming: false,
+              createdAt: message.createdAt,
+              updatedAt: message.updatedAt,
+            },
+          }),
+        );
+
+        return [childCreatedEvent, childLinkedEvent, ...messageEvents];
+      });
+
+      return [batchCreatedEvent, ...childEvents];
+    }
+
+    case "thread.fork.semantic": {
+      return yield* new OrchestrationCommandInvariantError({
+        commandType: command.type,
+        detail: "thread.fork.semantic must be normalized before reaching the decider.",
+      });
     }
 
     case "thread.meta.update": {
@@ -282,6 +518,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           text: command.message.text,
           attachments: command.message.attachments,
           turnId: null,
+          origin: "native",
           streaming: false,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
@@ -477,6 +714,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           role: "assistant",
           text: command.delta,
           turnId: command.turnId ?? null,
+          origin: "native",
           streaming: true,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
@@ -504,6 +742,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           role: "assistant",
           text: "",
           turnId: command.turnId ?? null,
+          origin: "native",
           streaming: false,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
@@ -576,6 +815,102 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           turnCount: command.turnCount,
+        },
+      };
+    }
+
+    case "thread.fork.bootstrap.complete": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.fork-bootstrap-completed",
+        payload: {
+          threadId: command.threadId,
+          bootstrappedAt: command.bootstrappedAt,
+        },
+      };
+    }
+
+    case "thread.delegation.child-status.set": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.parentThreadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.parentThreadId,
+          occurredAt: command.updatedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.delegation-child-status-set",
+        payload: {
+          batchId: command.batchId,
+          parentThreadId: command.parentThreadId,
+          childThreadId: command.childThreadId,
+          status: command.status,
+          blockingRequestId: command.blockingRequestId ?? null,
+          blockingKind: command.blockingKind ?? null,
+          updatedAt: command.updatedAt,
+        },
+      };
+    }
+
+    case "thread.delegation.child-result.record": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.parentThreadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.parentThreadId,
+          occurredAt: command.completedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.delegation-child-result-recorded",
+        payload: {
+          batchId: command.batchId,
+          parentThreadId: command.parentThreadId,
+          childThreadId: command.childThreadId,
+          status: command.status,
+          summary: command.summary,
+          error: command.error ?? null,
+          completedAt: command.completedAt,
+        },
+      };
+    }
+
+    case "thread.delegation.batch.complete": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.parentThreadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.parentThreadId,
+          occurredAt: command.completedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.delegation-batch-completed",
+        payload: {
+          batchId: command.batchId,
+          parentThreadId: command.parentThreadId,
+          status: command.status,
+          completedAt: command.completedAt,
         },
       };
     }

@@ -1,27 +1,18 @@
-import { MessageId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import { buildBootstrapInput } from "./historyBootstrap";
-
-const messageId = (value: string) => MessageId.makeUnsafe(value);
 
 describe("buildBootstrapInput", () => {
   it("includes full transcript when under budget", () => {
     const result = buildBootstrapInput(
       [
         {
-          id: messageId("u-1"),
           role: "user",
           text: "hello",
-          createdAt: "2026-02-09T00:00:00.000Z",
-          streaming: false,
         },
         {
-          id: messageId("a-1"),
           role: "assistant",
           text: "world",
-          createdAt: "2026-02-09T00:00:01.000Z",
-          streaming: false,
         },
       ],
       "what's next?",
@@ -41,25 +32,16 @@ describe("buildBootstrapInput", () => {
     const result = buildBootstrapInput(
       [
         {
-          id: messageId("u-1"),
           role: "user",
           text: "first question with details",
-          createdAt: "2026-02-09T00:00:00.000Z",
-          streaming: false,
         },
         {
-          id: messageId("a-1"),
           role: "assistant",
           text: "first answer with details",
-          createdAt: "2026-02-09T00:00:01.000Z",
-          streaming: false,
         },
         {
-          id: messageId("u-2"),
           role: "user",
           text: "second question with details",
-          createdAt: "2026-02-09T00:00:02.000Z",
-          streaming: false,
         },
       ],
       "final request",
@@ -78,11 +60,8 @@ describe("buildBootstrapInput", () => {
     const result = buildBootstrapInput(
       [
         {
-          id: messageId("u-1"),
           role: "user",
           text: "old context",
-          createdAt: "2026-02-09T00:00:00.000Z",
-          streaming: false,
         },
       ],
       latestPrompt,
@@ -99,7 +78,6 @@ describe("buildBootstrapInput", () => {
     const result = buildBootstrapInput(
       [
         {
-          id: messageId("u-image"),
           role: "user",
           text: "",
           attachments: [
@@ -111,8 +89,6 @@ describe("buildBootstrapInput", () => {
               sizeBytes: 2_048,
             },
           ],
-          createdAt: "2026-02-09T00:00:00.000Z",
-          streaming: false,
         },
       ],
       "What does this error mean?",

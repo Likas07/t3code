@@ -79,10 +79,20 @@ describe("orchestration projector", () => {
         branch: null,
         worktreePath: null,
         latestTurn: null,
+        fork: null,
+        lineage: {
+          rootThreadId: "thread-1",
+          parentThreadId: null,
+          delegationDepth: 0,
+          role: "primary",
+          parentBatchId: null,
+          parentTaskIndex: null,
+        },
         createdAt: now,
         updatedAt: now,
         deletedAt: null,
         messages: [],
+        delegationBatches: [],
         proposedPlans: [],
         activities: [],
         checkpoints: [],
@@ -120,6 +130,167 @@ describe("orchestration projector", () => {
         ),
       ),
     ).rejects.toBeDefined();
+  });
+
+  it("preserves fork-import messages when a forked thread is reverted", async () => {
+    const createdAt = "2026-03-01T00:00:00.000Z";
+    const completedAt = "2026-03-01T00:00:10.000Z";
+    const model = createEmptyReadModel(createdAt);
+
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        model,
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-fork",
+          occurredAt: createdAt,
+          commandId: "cmd-create-fork",
+          payload: {
+            threadId: "thread-fork",
+            projectId: "project-1",
+            title: "Fork",
+            model: "gpt-5-codex",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            fork: {
+              kind: "semantic",
+              sourceThreadId: "thread-source",
+              bootstrapStatus: "pending",
+              importedMessageCount: 2,
+              createdAt,
+              bootstrappedAt: null,
+            },
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+    const afterImportedUser = await Effect.runPromise(
+      projectEvent(
+        afterCreate,
+        makeEvent({
+          sequence: 2,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-fork",
+          occurredAt: createdAt,
+          commandId: "cmd-import-user",
+          payload: {
+            threadId: "thread-fork",
+            messageId: "fork-user",
+            role: "user",
+            text: "original question",
+            attachments: [],
+            turnId: null,
+            origin: "fork-import",
+            streaming: false,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+    const afterImportedAssistant = await Effect.runPromise(
+      projectEvent(
+        afterImportedUser,
+        makeEvent({
+          sequence: 3,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-fork",
+          occurredAt: createdAt,
+          commandId: "cmd-import-assistant",
+          payload: {
+            threadId: "thread-fork",
+            messageId: "fork-assistant",
+            role: "assistant",
+            text: "original answer",
+            attachments: [],
+            turnId: null,
+            origin: "fork-import",
+            streaming: false,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+    const afterNativeAssistant = await Effect.runPromise(
+      projectEvent(
+        afterImportedAssistant,
+        makeEvent({
+          sequence: 4,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-fork",
+          occurredAt: completedAt,
+          commandId: "cmd-native-assistant",
+          payload: {
+            threadId: "thread-fork",
+            messageId: "assistant-native",
+            role: "assistant",
+            text: "new answer",
+            attachments: [],
+            turnId: "turn-1",
+            origin: "native",
+            streaming: false,
+            createdAt: completedAt,
+            updatedAt: completedAt,
+          },
+        }),
+      ),
+    );
+    const afterCheckpoint = await Effect.runPromise(
+      projectEvent(
+        afterNativeAssistant,
+        makeEvent({
+          sequence: 5,
+          type: "thread.turn-diff-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-fork",
+          occurredAt: completedAt,
+          commandId: "cmd-checkpoint",
+          payload: {
+            threadId: "thread-fork",
+            turnId: "turn-1",
+            checkpointTurnCount: 1,
+            checkpointRef: "refs/t3/checkpoints/fork/turn/1",
+            status: "ready",
+            files: [],
+            assistantMessageId: "assistant-native",
+            completedAt,
+          },
+        }),
+      ),
+    );
+
+    const reverted = await Effect.runPromise(
+      projectEvent(
+        afterCheckpoint,
+        makeEvent({
+          sequence: 6,
+          type: "thread.reverted",
+          aggregateKind: "thread",
+          aggregateId: "thread-fork",
+          occurredAt: "2026-03-01T00:00:20.000Z",
+          commandId: "cmd-revert",
+          payload: {
+            threadId: "thread-fork",
+            turnCount: 0,
+          },
+        }),
+      ),
+    );
+
+    expect(reverted.threads[0]?.messages.map((message) => message.id)).toEqual([
+      "fork-user",
+      "fork-assistant",
+    ]);
   });
 
   it("keeps projector forward-compatible for unhandled event types", async () => {

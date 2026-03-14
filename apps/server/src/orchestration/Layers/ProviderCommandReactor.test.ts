@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { ProviderRuntimeEvent, ProviderSession } from "@t3tools/contracts";
+import type { ProviderRuntimeEvent, ProviderSendTurnInput, ProviderSession } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
   CommandId,
@@ -145,6 +145,7 @@ describe("ProviderCommandReactor", () => {
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
+    const resolveToolCall = vi.fn<ProviderServiceShape["resolveToolCall"]>(() => Effect.void);
     const stopSession = vi.fn((input: unknown) =>
       Effect.sync(() => {
         const threadId =
@@ -187,6 +188,7 @@ describe("ProviderCommandReactor", () => {
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
+      resolveToolCall: resolveToolCall as ProviderServiceShape["resolveToolCall"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
       listSessions: () => Effect.succeed(runtimeSessions),
       getCapabilities: (provider) =>
@@ -297,6 +299,161 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("bootstraps the first provider turn for semantic forks exactly once", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.semantic.materialized",
+        commandId: CommandId.makeUnsafe("cmd-fork-materialized"),
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        threadId: ThreadId.makeUnsafe("thread-fork"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Thread (fork)",
+        model: "gpt-5-codex",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        branch: null,
+        worktreePath: null,
+        messages: [
+          {
+            messageId: asMessageId("fork-import-user"),
+            role: "user",
+            text: "hello",
+            attachments: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            messageId: asMessageId("fork-import-assistant"),
+            role: "assistant",
+            text: "world",
+            attachments: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-fork-turn-start-1"),
+        threadId: ThreadId.makeUnsafe("thread-fork"),
+        message: {
+          messageId: asMessageId("fork-user-message-1"),
+          role: "user",
+          text: "what next?",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const firstForkSendInput = harness.sendTurn.mock.calls[0]?.[0] as
+      | ProviderSendTurnInput
+      | undefined;
+    expect(firstForkSendInput).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-fork"),
+    });
+    expect(String(firstForkSendInput?.input ?? "")).toContain("Transcript context:");
+    expect(String(firstForkSendInput?.input ?? "")).toContain("what next?");
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-fork"))?.fork
+          ?.bootstrapStatus === "completed"
+      );
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-fork-turn-start-2"),
+        threadId: ThreadId.makeUnsafe("thread-fork"),
+        message: {
+          messageId: asMessageId("fork-user-message-2"),
+          role: "user",
+          text: "raw follow-up",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-fork"),
+      input: "raw follow-up",
+    });
+  });
+
+  it("keeps fork bootstrap pending when the first provider send fails", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.sendTurn.mockImplementationOnce(() => Effect.die(new Error("boom")));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.semantic.materialized",
+        commandId: CommandId.makeUnsafe("cmd-fork-materialized-fail"),
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        threadId: ThreadId.makeUnsafe("thread-fork-fail"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Thread (fork)",
+        model: "gpt-5-codex",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        branch: null,
+        worktreePath: null,
+        messages: [
+          {
+            messageId: asMessageId("fork-import-user-fail"),
+            role: "user",
+            text: "hello",
+            attachments: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-fork-turn-start-fail"),
+        threadId: ThreadId.makeUnsafe("thread-fork-fail"),
+        message: {
+          messageId: asMessageId("fork-user-message-fail"),
+          role: "user",
+          text: "still pending",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    expect(
+      readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-fork-fail"))?.fork
+        ?.bootstrapStatus,
+    ).toBe("pending");
   });
 
   it("forwards codex model options through session start and turn send", async () => {

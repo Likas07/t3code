@@ -1442,6 +1442,16 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         catch: (cause) => toRequestError(threadId, "item/tool/requestUserInput", cause),
       });
 
+    const resolveToolCall: CodexAdapterShape["resolveToolCall"] = (
+      threadId,
+      requestId,
+      result,
+    ) =>
+      Effect.tryPromise({
+        try: () => manager.resolveToolCall(threadId, requestId, result),
+        catch: (cause) => toRequestError(threadId, "item/tool/call", cause),
+      });
+
     const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>
       Effect.sync(() => {
         manager.stopSession(threadId);
@@ -1510,6 +1520,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       rollbackThread,
       respondToRequest,
       respondToUserInput,
+      resolveToolCall,
       stopSession,
       listSessions,
       hasSession,

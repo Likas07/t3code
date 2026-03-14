@@ -87,6 +87,15 @@ export interface ProviderAdapterShape<TError> {
   ) => Effect.Effect<void, TError>;
 
   /**
+   * Resolve a dynamic tool call request opened by the provider runtime.
+   */
+  readonly resolveToolCall: (
+    threadId: ThreadId,
+    requestId: ApprovalRequestId,
+    result: unknown,
+  ) => Effect.Effect<void, TError>;
+
+  /**
    * Stop one provider session.
    */
   readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, TError>;

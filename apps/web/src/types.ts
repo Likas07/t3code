@@ -1,8 +1,10 @@
 import type {
+  OrchestrationDelegationBatch,
   OrchestrationLatestTurn,
   OrchestrationProposedPlanId,
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
+  OrchestrationThreadLineage,
   ProjectScript as ContractProjectScript,
   ThreadId,
   ProjectId,
@@ -100,6 +102,8 @@ export interface Thread {
   lastVisitedAt?: string | undefined;
   branch: string | null;
   worktreePath: string | null;
+  lineage: OrchestrationThreadLineage;
+  delegationBatches: OrchestrationDelegationBatch[];
   turnDiffSummaries: TurnDiffSummary[];
   activities: OrchestrationThreadActivity[];
 }
