@@ -45,7 +45,8 @@ export const ThreadDelegationChildResultRecordedPayload =
   ContractsThreadDelegationChildResultRecordedPayloadSchema;
 export const ThreadDelegationChildStatusSetPayload =
   ContractsThreadDelegationChildStatusSetPayloadSchema;
-export const ThreadForkBootstrapCompletedPayload = ContractsThreadForkBootstrapCompletedPayloadSchema;
+export const ThreadForkBootstrapCompletedPayload =
+  ContractsThreadForkBootstrapCompletedPayloadSchema;
 
 export const MessageSentPayloadSchema = ContractsThreadMessageSentPayloadSchema;
 export const ThreadProposedPlanUpsertedPayload = ContractsThreadProposedPlanUpsertedPayloadSchema;

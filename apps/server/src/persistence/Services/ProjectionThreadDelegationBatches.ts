@@ -51,4 +51,6 @@ export interface ProjectionThreadDelegationBatchRepositoryShape {
 export class ProjectionThreadDelegationBatchRepository extends ServiceMap.Service<
   ProjectionThreadDelegationBatchRepository,
   ProjectionThreadDelegationBatchRepositoryShape
->()("t3/persistence/Services/ProjectionThreadDelegationBatches/ProjectionThreadDelegationBatchRepository") {}
+>()(
+  "t3/persistence/Services/ProjectionThreadDelegationBatches/ProjectionThreadDelegationBatchRepository",
+) {}

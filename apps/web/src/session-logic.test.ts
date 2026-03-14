@@ -344,6 +344,26 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
+  it("keeps dynamic tool start entries visible while the tool is running", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "dynamic-tool-start",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        summary: "Tool call started",
+        kind: "tool.started",
+        payload: {
+          itemType: "dynamic_tool_call",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => entry.id)).toEqual(["dynamic-tool-start"]);
+    expect(entries[0]).toMatchObject({
+      itemType: "dynamic_tool_call",
+    });
+  });
+
   it("omits task start and completion lifecycle entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

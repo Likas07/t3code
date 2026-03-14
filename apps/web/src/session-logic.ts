@@ -418,7 +418,7 @@ export function deriveWorkLogEntries(
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   return ordered
     .filter((activity) => (latestTurnId ? activity.turnId === latestTurnId : true))
-    .filter((activity) => activity.kind !== "tool.started")
+    .filter((activity) => !shouldHideWorkActivity(activity))
     .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
     .filter((activity) => activity.summary !== "Checkpoint captured")
     .map((activity) => {
@@ -460,6 +460,18 @@ export function deriveWorkLogEntries(
       }
       return entry;
     });
+}
+
+function shouldHideWorkActivity(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind !== "tool.started") {
+    return false;
+  }
+  const payload =
+    activity.payload && typeof activity.payload === "object"
+      ? (activity.payload as Record<string, unknown>)
+      : null;
+  const itemType = extractWorkLogItemType(payload);
+  return itemType !== "dynamic_tool_call" && itemType !== "collab_agent_tool_call";
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

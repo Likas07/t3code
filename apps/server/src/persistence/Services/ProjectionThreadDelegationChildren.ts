@@ -57,4 +57,6 @@ export interface ProjectionThreadDelegationChildRepositoryShape {
 export class ProjectionThreadDelegationChildRepository extends ServiceMap.Service<
   ProjectionThreadDelegationChildRepository,
   ProjectionThreadDelegationChildRepositoryShape
->()("t3/persistence/Services/ProjectionThreadDelegationChildren/ProjectionThreadDelegationChildRepository") {}
+>()(
+  "t3/persistence/Services/ProjectionThreadDelegationChildren/ProjectionThreadDelegationChildRepository",
+) {}

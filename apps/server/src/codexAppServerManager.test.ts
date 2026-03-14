@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { ApprovalRequestId, ThreadId } from "@t3tools/contracts";
 
+import { buildDelegateThreadsDynamicToolSpec } from "./orchestration/delegationTool.ts";
 import {
   buildCodexInitializeParams,
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
@@ -270,6 +271,14 @@ describe("resolveCodexModelForAccount", () => {
 });
 
 describe("startSession", () => {
+  it("tells Codex to proactively use delegation when work decomposes cleanly", () => {
+    expect(CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS).toContain("delegate_threads");
+    expect(CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS).toContain(
+      "Prefer using the `delegate_threads` dynamic tool",
+    );
+    expect(CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS).toContain("parallel, independent sub-tasks");
+  });
+
   it("enables Codex experimental api capabilities during initialize", () => {
     expect(buildCodexInitializeParams()).toEqual({
       clientInfo: {
@@ -280,6 +289,51 @@ describe("startSession", () => {
       capabilities: {
         experimentalApi: true,
       },
+    });
+  });
+
+  it("declares delegate_threads as an exposed dynamic tool", () => {
+    expect(buildDelegateThreadsDynamicToolSpec()).toEqual({
+      name: "delegate_threads",
+      description:
+        "Use this when a task can be split into independent sub-tasks. Prefer this tool for multi-step work that can run as parallel, independent sub-tasks, especially when each sub-task has clear ownership or can be completed without blocking the others. Do not use it for tiny tasks or work that must stay tightly coupled in one thread. Return a short delegation plan by providing 1-N concrete tasks with titles and prompts.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          tasks: {
+            type: "array",
+            minItems: 1,
+            maxItems: 6,
+            items: {
+              type: "object",
+              properties: {
+                title: {
+                  type: "string",
+                  minLength: 1,
+                },
+                prompt: {
+                  type: "string",
+                  minLength: 1,
+                },
+              },
+              required: ["title", "prompt"],
+              additionalProperties: false,
+            },
+          },
+          workspaceMode: {
+            type: "string",
+            enum: ["same-worktree", "separate-worktree"],
+          },
+          concurrencyLimit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 3,
+          },
+        },
+        required: ["tasks"],
+        additionalProperties: false,
+      },
+      deferLoading: false,
     });
   });
 

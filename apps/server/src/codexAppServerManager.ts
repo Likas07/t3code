@@ -27,6 +27,7 @@ import {
   isCodexCliVersionSupported,
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
+import { buildDelegateThreadsDynamicToolSpec } from "./orchestration/delegationTool.ts";
 
 type PendingRequestKey = string;
 
@@ -347,6 +348,12 @@ Your active mode changes only when new developer instructions with a different \
 The \`request_user_input\` tool is unavailable in Default mode. If you call it while in Default mode, it will return an error.
 
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
+
+## Delegation
+
+When the \`delegate_threads\` dynamic tool is available, Prefer using the \`delegate_threads\` dynamic tool for work that can be broken into parallel, independent sub-tasks. Reach for it proactively when the task naturally decomposes into separate investigations, file-localized changes, or other sub-tasks with clear ownership that do not need tight step-by-step coordination in a single thread.
+
+Do not use delegation for tiny tasks, tightly coupled edits, or cases where the overhead would outweigh the benefit.
 </collaboration_mode>`;
 
 function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
@@ -421,6 +428,10 @@ export function buildCodexInitializeParams() {
       experimentalApi: true,
     },
   } as const;
+}
+
+function buildCodexDynamicToolSpecs() {
+  return [buildDelegateThreadsDynamicToolSpec()];
 }
 
 function buildCodexCollaborationMode(input: {
@@ -625,6 +636,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       const threadStartParams = {
         ...sessionOverrides,
+        dynamicTools: buildCodexDynamicToolSpecs(),
         experimentalRawEvents: false,
       };
       const resumeThreadId = readResumeThreadId(input);

@@ -1442,11 +1442,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         catch: (cause) => toRequestError(threadId, "item/tool/requestUserInput", cause),
       });
 
-    const resolveToolCall: CodexAdapterShape["resolveToolCall"] = (
-      threadId,
-      requestId,
-      result,
-    ) =>
+    const resolveToolCall: CodexAdapterShape["resolveToolCall"] = (threadId, requestId, result) =>
       Effect.tryPromise({
         try: () => manager.resolveToolCall(threadId, requestId, result),
         catch: (cause) => toRequestError(threadId, "item/tool/call", cause),

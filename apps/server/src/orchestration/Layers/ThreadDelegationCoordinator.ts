@@ -9,20 +9,24 @@ import {
   type OrchestrationEvent,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
-import { Effect, FileSystem, Layer, Path, Queue, Stream } from "effect";
+import { Effect, Layer, Queue, Stream } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
-import { ServerConfig } from "../../config.ts";
-import { cloneThreadMessagesForDestination } from "../threadForking.ts";
+import { buildDelegationBootstrapMessages } from "../delegationContext.ts";
+import {
+  createDelegateThreadsToolFailureResult,
+  createDelegateThreadsToolSuccessResult,
+  DELEGATE_THREADS_TOOL_NAME,
+  MAX_DELEGATION_CONCURRENCY,
+  MAX_DELEGATION_TASKS,
+} from "../delegationTool.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ThreadDelegationCoordinator,
   type ThreadDelegationCoordinatorShape,
 } from "../Services/ThreadDelegationCoordinator.ts";
 
-const MAX_DELEGATION_TASKS = 6;
-const DEFAULT_CONCURRENCY_LIMIT = 3;
 const DELEGATION_PROMPT_PREFIX =
   "You are executing one delegated task from a parent thread. Focus only on the assigned task and report results clearly.";
 
@@ -102,9 +106,10 @@ function parseDelegateThreadsRequest(args: unknown): {
   const toolName =
     asString(raw.name) ??
     asString(raw.toolName) ??
+    asString(raw.tool) ??
     asString(asObject(raw.tool)?.name) ??
-    (raw.tasks !== undefined ? "delegate_threads" : null);
-  if (toolName !== "delegate_threads") {
+    (raw.tasks !== undefined ? DELEGATE_THREADS_TOOL_NAME : null);
+  if (toolName !== DELEGATE_THREADS_TOOL_NAME) {
     return null;
   }
 
@@ -140,12 +145,12 @@ function parseDelegateThreadsRequest(args: unknown): {
   const requestedConcurrency =
     typeof payload.concurrencyLimit === "number" && Number.isFinite(payload.concurrencyLimit)
       ? Math.max(1, Math.trunc(payload.concurrencyLimit))
-      : DEFAULT_CONCURRENCY_LIMIT;
+      : MAX_DELEGATION_CONCURRENCY;
 
   return {
     tasks,
     workspaceMode,
-    concurrencyLimit: Math.min(requestedConcurrency, DEFAULT_CONCURRENCY_LIMIT),
+    concurrencyLimit: Math.min(requestedConcurrency, MAX_DELEGATION_CONCURRENCY),
   };
 }
 
@@ -187,11 +192,9 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
   const gitCore = yield* GitCore;
-  const fileSystem = yield* FileSystem.FileSystem;
-  const pathService = yield* Path.Path;
-  const serverConfig = yield* ServerConfig;
   const queue = yield* Queue.unbounded<
-    { type: "provider"; event: ProviderRuntimeEvent } | { type: "domain"; event: OrchestrationEvent }
+    | { type: "provider"; event: ProviderRuntimeEvent }
+    | { type: "domain"; event: OrchestrationEvent }
   >();
   const liveBatches = new Map<string, LiveBatch>();
 
@@ -299,7 +302,7 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
     yield* providerService.resolveToolCall({
       threadId: batch.parentThreadId,
       requestId: batch.requestId,
-      result: {
+      result: createDelegateThreadsToolSuccessResult({
         batchId,
         status,
         workspaceMode: batch.workspaceMode,
@@ -310,7 +313,7 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
           branch: child.branch,
           worktreePath: child.worktreePath,
         })),
-      },
+      }),
     });
     liveBatches.delete(batchId);
   });
@@ -328,13 +331,17 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
       return;
     }
 
-    const nextChildren = batch.children.filter((child) => child.status === "queued").slice(0, availableSlots);
+    const nextChildren = batch.children
+      .filter((child) => child.status === "queued")
+      .slice(0, availableSlots);
     for (const child of nextChildren) {
       child.status = "running";
       const now = new Date().toISOString();
       yield* engine.dispatch({
         type: "thread.delegation.child-status.set",
-        commandId: CommandId.makeUnsafe(`delegation:child-status:${child.threadId}:${crypto.randomUUID()}`),
+        commandId: CommandId.makeUnsafe(
+          `delegation:child-status:${child.threadId}:${crypto.randomUUID()}`,
+        ),
         parentThreadId: batch.parentThreadId,
         batchId,
         childThreadId: child.threadId,
@@ -344,7 +351,9 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
       });
       yield* engine.dispatch({
         type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe(`delegation:child-turn:${child.threadId}:${crypto.randomUUID()}`),
+        commandId: CommandId.makeUnsafe(
+          `delegation:child-turn:${child.threadId}:${crypto.randomUUID()}`,
+        ),
         threadId: child.threadId,
         message: {
           messageId: MessageId.makeUnsafe(crypto.randomUUID()),
@@ -359,7 +368,9 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
     }
   });
 
-  const spawnDelegationBatch = Effect.fn(function* (event: Extract<ProviderRuntimeEvent, { type: "request.opened" }>) {
+  const spawnDelegationBatch = Effect.fn(function* (
+    event: Extract<ProviderRuntimeEvent, { type: "request.opened" }>,
+  ) {
     if (event.payload.requestType !== "dynamic_tool_call" || !event.requestId) {
       return;
     }
@@ -379,10 +390,7 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
       yield* providerService.resolveToolCall({
         threadId: event.threadId,
         requestId: toolRequestId,
-        result: {
-          status: "failed",
-          error: "Nested delegation is not supported in v1.",
-        },
+        result: createDelegateThreadsToolFailureResult("Nested delegation is not supported in v1."),
       });
       return;
     }
@@ -390,10 +398,9 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
       yield* providerService.resolveToolCall({
         threadId: event.threadId,
         requestId: toolRequestId,
-        result: {
-          status: "failed",
-          error: "This thread already has a running delegation batch.",
-        },
+        result: createDelegateThreadsToolFailureResult(
+          "This thread already has a running delegation batch.",
+        ),
       });
       return;
     }
@@ -403,25 +410,25 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
       yield* providerService.resolveToolCall({
         threadId: event.threadId,
         requestId: toolRequestId,
-        result: {
-          status: "failed",
-          error: "Delegation runtime dependencies are unavailable.",
-        },
+        result: createDelegateThreadsToolFailureResult(
+          "Delegation runtime dependencies are unavailable.",
+        ),
       });
       return;
     }
 
     const batchId = crypto.randomUUID();
     const baseBranch =
-      request.workspaceMode === "separate-worktree" ? yield* resolveBaseBranch(event.threadId) : null;
+      request.workspaceMode === "separate-worktree"
+        ? yield* resolveBaseBranch(event.threadId)
+        : null;
     if (request.workspaceMode === "separate-worktree" && !baseBranch) {
       yield* providerService.resolveToolCall({
         threadId: event.threadId,
         requestId: toolRequestId,
-        result: {
-          status: "failed",
-          error: "Could not resolve a base branch for separate-worktree delegation.",
-        },
+        result: createDelegateThreadsToolFailureResult(
+          "Could not resolve a base branch for separate-worktree delegation.",
+        ),
       });
       return;
     }
@@ -431,12 +438,12 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
       (task, taskIndex) =>
         Effect.gen(function* () {
           const threadId = ThreadId.makeUnsafe(crypto.randomUUID());
-          const importedMessages = yield* cloneThreadMessagesForDestination({
-            destinationThreadId: threadId,
-            messages: parentThread.messages,
-            stateDir: serverConfig.stateDir,
-            fileSystem,
-            path: pathService,
+          const bootstrapMessages = buildDelegationBootstrapMessages({
+            parentThreadId: event.threadId,
+            parentThreadTitle: parentThread.title,
+            branch: parentThread.branch,
+            worktreePath: parentThread.worktreePath,
+            createdAt: new Date().toISOString(),
           });
 
           let branch = parentThread.branch;
@@ -444,12 +451,14 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
           let startError: string | null = null;
           if (request.workspaceMode === "separate-worktree" && baseBranch) {
             const newBranch = `t3code/delegation/${parentThread.id.slice(0, 8)}/${batchId.slice(0, 8)}/${taskIndex + 1}-${slugify(task.title, `task-${taskIndex + 1}`)}`;
-            const worktree = yield* gitCore.createWorktree({
-              cwd: project.workspaceRoot,
-              branch: baseBranch,
-              newBranch,
-              path: null,
-            }).pipe(Effect.catch(() => Effect.succeed(null)));
+            const worktree = yield* gitCore
+              .createWorktree({
+                cwd: project.workspaceRoot,
+                branch: baseBranch,
+                newBranch,
+                path: null,
+              })
+              .pipe(Effect.catch(() => Effect.succeed(null)));
             if (worktree) {
               branch = worktree.worktree.branch;
               worktreePath = worktree.worktree.path;
@@ -471,7 +480,7 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
             worktreePath,
             forkSourceThreadId: event.threadId,
             createdAt: new Date().toISOString(),
-            messages: importedMessages,
+            messages: bootstrapMessages,
             startError,
           };
         }),
@@ -543,7 +552,9 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
           child.status = "blocked";
           yield* engine.dispatch({
             type: "thread.delegation.child-status.set",
-            commandId: CommandId.makeUnsafe(`delegation:block:${child.threadId}:${crypto.randomUUID()}`),
+            commandId: CommandId.makeUnsafe(
+              `delegation:block:${child.threadId}:${crypto.randomUUID()}`,
+            ),
             parentThreadId: batch.parentThreadId,
             batchId: batch.batchId,
             childThreadId: child.threadId,
@@ -571,7 +582,9 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
           child.status = "blocked";
           yield* engine.dispatch({
             type: "thread.delegation.child-status.set",
-            commandId: CommandId.makeUnsafe(`delegation:block:${child.threadId}:${crypto.randomUUID()}`),
+            commandId: CommandId.makeUnsafe(
+              `delegation:block:${child.threadId}:${crypto.randomUUID()}`,
+            ),
             parentThreadId: batch.parentThreadId,
             batchId: batch.batchId,
             childThreadId: child.threadId,
@@ -603,7 +616,9 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
             child.status = "running";
             yield* engine.dispatch({
               type: "thread.delegation.child-status.set",
-              commandId: CommandId.makeUnsafe(`delegation:resume:${child.threadId}:${crypto.randomUUID()}`),
+              commandId: CommandId.makeUnsafe(
+                `delegation:resume:${child.threadId}:${crypto.randomUUID()}`,
+              ),
               parentThreadId: batch.parentThreadId,
               batchId: batch.batchId,
               childThreadId: child.threadId,
@@ -622,7 +637,9 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
       if (
         childThread &&
         latestTurnState &&
-        (latestTurnState === "completed" || latestTurnState === "error" || latestTurnState === "interrupted") &&
+        (latestTurnState === "completed" ||
+          latestTurnState === "error" ||
+          latestTurnState === "interrupted") &&
         !isTerminalStatus(child.status)
       ) {
         const assistantMessage = childThread.messages
@@ -639,14 +656,15 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
         child.status = status;
         yield* engine.dispatch({
           type: "thread.delegation.child-result.record",
-          commandId: CommandId.makeUnsafe(`delegation:result:${child.threadId}:${crypto.randomUUID()}`),
+          commandId: CommandId.makeUnsafe(
+            `delegation:result:${child.threadId}:${crypto.randomUUID()}`,
+          ),
           parentThreadId: batch.parentThreadId,
           batchId: batch.batchId,
           childThreadId: child.threadId,
           status,
           summary: summary ? truncate(summary) : null,
-          error:
-            status === "completed" ? null : truncate(summary ? summary : latestTurnState),
+          error: status === "completed" ? null : truncate(summary ? summary : latestTurnState),
           completedAt: event.occurredAt,
           createdAt: event.occurredAt,
         });
@@ -665,7 +683,9 @@ const makeThreadDelegationCoordinator = Effect.gen(function* () {
       Effect.flatMap((item) => {
         if (item.type === "provider") {
           if (item.event.type === "request.opened") {
-            return spawnDelegationBatch(item.event as Extract<ProviderRuntimeEvent, { type: "request.opened" }>);
+            return spawnDelegationBatch(
+              item.event as Extract<ProviderRuntimeEvent, { type: "request.opened" }>,
+            );
           }
           return Effect.void;
         }

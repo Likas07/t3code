@@ -18,12 +18,8 @@ import {
   type ProjectionThreadMessage,
   ProjectionThreadMessageRepository,
 } from "../../persistence/Services/ProjectionThreadMessages.ts";
-import {
-  ProjectionThreadDelegationBatchRepository,
-} from "../../persistence/Services/ProjectionThreadDelegationBatches.ts";
-import {
-  ProjectionThreadDelegationChildRepository,
-} from "../../persistence/Services/ProjectionThreadDelegationChildren.ts";
+import { ProjectionThreadDelegationBatchRepository } from "../../persistence/Services/ProjectionThreadDelegationBatches.ts";
+import { ProjectionThreadDelegationChildRepository } from "../../persistence/Services/ProjectionThreadDelegationChildren.ts";
 import {
   type ProjectionThreadProposedPlan,
   ProjectionThreadProposedPlanRepository,
@@ -358,8 +354,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const projectionProjectRepository = yield* ProjectionProjectRepository;
   const projectionThreadRepository = yield* ProjectionThreadRepository;
   const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
-  const projectionThreadDelegationBatchRepository = yield* ProjectionThreadDelegationBatchRepository;
-  const projectionThreadDelegationChildRepository = yield* ProjectionThreadDelegationChildRepository;
+  const projectionThreadDelegationBatchRepository =
+    yield* ProjectionThreadDelegationBatchRepository;
+  const projectionThreadDelegationChildRepository =
+    yield* ProjectionThreadDelegationChildRepository;
   const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
@@ -535,8 +533,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
-            forkBootstrapStatus:
-              existingRow.value.forkKind === null ? null : "completed",
+            forkBootstrapStatus: existingRow.value.forkKind === null ? null : "completed",
             forkBootstrappedAt:
               existingRow.value.forkKind === null ? null : event.payload.bootstrappedAt,
             updatedAt: event.occurredAt,
@@ -633,25 +630,26 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         case "thread.delegation-child-linked":
         case "thread.delegation-child-status-set":
         case "thread.delegation-child-result-recorded": {
-          const existingRows = yield* projectionThreadDelegationBatchRepository.listByParentThreadId({
-            parentThreadId: event.payload.parentThreadId,
-          });
+          const existingRows =
+            yield* projectionThreadDelegationBatchRepository.listByParentThreadId({
+              parentThreadId: event.payload.parentThreadId,
+            });
           const existingRow = existingRows.find((row) => row.batchId === event.payload.batchId);
           if (!existingRow) {
             return;
           }
           yield* projectionThreadDelegationBatchRepository.upsert({
             ...existingRow,
-            updatedAt:
-              "updatedAt" in event.payload ? event.payload.updatedAt : event.occurredAt,
+            updatedAt: "updatedAt" in event.payload ? event.payload.updatedAt : event.occurredAt,
           });
           return;
         }
 
         case "thread.delegation-batch-completed": {
-          const existingRows = yield* projectionThreadDelegationBatchRepository.listByParentThreadId({
-            parentThreadId: event.payload.parentThreadId,
-          });
+          const existingRows =
+            yield* projectionThreadDelegationBatchRepository.listByParentThreadId({
+              parentThreadId: event.payload.parentThreadId,
+            });
           const existingRow = existingRows.find((row) => row.batchId === event.payload.batchId);
           if (!existingRow) {
             return;
@@ -705,9 +703,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
 
         case "thread.delegation-child-status-set":
         case "thread.delegation-child-result-recorded": {
-          const existingRows = yield* projectionThreadDelegationChildRepository.listByParentThreadId({
-            parentThreadId: event.payload.parentThreadId,
-          });
+          const existingRows =
+            yield* projectionThreadDelegationChildRepository.listByParentThreadId({
+              parentThreadId: event.payload.parentThreadId,
+            });
           const existingRow = existingRows.find(
             (row) => row.childThreadId === event.payload.childThreadId,
           );
@@ -721,7 +720,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               blockingRequestId: event.payload.blockingRequestId,
               blockingKind: event.payload.blockingKind,
               startedAt:
-                existingRow.startedAt ?? (event.payload.status === "running" ? event.payload.updatedAt : null),
+                existingRow.startedAt ??
+                (event.payload.status === "running" ? event.payload.updatedAt : null),
               updatedAt: event.payload.updatedAt,
             });
             return;

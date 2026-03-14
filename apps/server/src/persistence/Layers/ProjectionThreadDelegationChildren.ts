@@ -122,7 +122,9 @@ const makeProjectionThreadDelegationChildRepository = Effect.gen(function* () {
     (input) =>
       listRows(input).pipe(
         Effect.mapError(
-          toPersistenceSqlError("ProjectionThreadDelegationChildRepository.listByParentThreadId:query"),
+          toPersistenceSqlError(
+            "ProjectionThreadDelegationChildRepository.listByParentThreadId:query",
+          ),
         ),
       );
 
@@ -130,7 +132,9 @@ const makeProjectionThreadDelegationChildRepository = Effect.gen(function* () {
     (input) =>
       deleteRows(input).pipe(
         Effect.mapError(
-          toPersistenceSqlError("ProjectionThreadDelegationChildRepository.deleteByParentThreadId:query"),
+          toPersistenceSqlError(
+            "ProjectionThreadDelegationChildRepository.deleteByParentThreadId:query",
+          ),
         ),
       );
 

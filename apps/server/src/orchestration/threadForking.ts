@@ -55,14 +55,16 @@ const cloneAttachment = Effect.fn(function* (input: {
     );
   }
 
-  const sourceBytes = yield* input.fileSystem.readFile(sourcePath).pipe(
-    Effect.mapError(
-      () =>
-        new ThreadForkMaterializationError(
-          `Attachment '${input.attachment.id}' could not be read for forking.`,
-        ),
-    ),
-  );
+  const sourceBytes = yield* input.fileSystem
+    .readFile(sourcePath)
+    .pipe(
+      Effect.mapError(
+        () =>
+          new ThreadForkMaterializationError(
+            `Attachment '${input.attachment.id}' could not be read for forking.`,
+          ),
+      ),
+    );
 
   const clonedAttachmentId = createAttachmentId(input.destinationThreadId);
   if (!clonedAttachmentId) {
@@ -88,22 +90,26 @@ const cloneAttachment = Effect.fn(function* (input: {
     );
   }
 
-  yield* input.fileSystem.makeDirectory(input.path.dirname(destinationPath), { recursive: true }).pipe(
-    Effect.mapError(
-      () =>
-        new ThreadForkMaterializationError(
-          `Attachment '${input.attachment.id}' destination directory could not be created.`,
-        ),
-    ),
-  );
-  yield* input.fileSystem.writeFile(destinationPath, sourceBytes).pipe(
-    Effect.mapError(
-      () =>
-        new ThreadForkMaterializationError(
-          `Attachment '${input.attachment.id}' could not be copied into the fork.`,
-        ),
-    ),
-  );
+  yield* input.fileSystem
+    .makeDirectory(input.path.dirname(destinationPath), { recursive: true })
+    .pipe(
+      Effect.mapError(
+        () =>
+          new ThreadForkMaterializationError(
+            `Attachment '${input.attachment.id}' destination directory could not be created.`,
+          ),
+      ),
+    );
+  yield* input.fileSystem
+    .writeFile(destinationPath, sourceBytes)
+    .pipe(
+      Effect.mapError(
+        () =>
+          new ThreadForkMaterializationError(
+            `Attachment '${input.attachment.id}' could not be copied into the fork.`,
+          ),
+      ),
+    );
 
   return clonedAttachment;
 });
@@ -172,7 +178,9 @@ export const materializeSemanticThreadFork = Effect.fn(function* (input: {
     );
   }
 
-  const destinationExists = input.readModel.threads.some((thread) => thread.id === input.destinationThreadId);
+  const destinationExists = input.readModel.threads.some(
+    (thread) => thread.id === input.destinationThreadId,
+  );
   if (destinationExists) {
     return yield* Effect.fail(
       new ThreadForkMaterializationError(

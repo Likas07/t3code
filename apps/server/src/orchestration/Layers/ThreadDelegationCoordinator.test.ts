@@ -7,6 +7,7 @@ import {
   ProjectId,
   RuntimeRequestId,
   EventId,
+  MessageId,
   ThreadId,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
@@ -31,7 +32,10 @@ import { ThreadDelegationCoordinator } from "../Services/ThreadDelegationCoordin
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 2000): Promise<void> {
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 2000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await predicate()) {
@@ -158,7 +162,23 @@ describe("ThreadDelegationCoordinator", () => {
     await Effect.runPromise(
       engine.dispatch({
         type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-source-thread"),
+        threadId: ThreadId.makeUnsafe("thread-source"),
+        projectId: asProjectId("project-1"),
+        title: "Source",
+        model: "gpt-5-codex",
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "feature/parent",
+        worktreePath: "/tmp/worktree-parent",
+        createdAt: "2026-03-12T00:00:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      engine.dispatch({
+        type: "thread.fork.semantic.materialized",
         commandId: CommandId.makeUnsafe("cmd-parent-thread"),
+        sourceThreadId: ThreadId.makeUnsafe("thread-source"),
         threadId: ThreadId.makeUnsafe("thread-parent"),
         projectId: asProjectId("project-1"),
         title: "Parent",
@@ -167,7 +187,25 @@ describe("ThreadDelegationCoordinator", () => {
         interactionMode: "default",
         branch: "feature/parent",
         worktreePath: "/tmp/worktree-parent",
-        createdAt: "2026-03-12T00:00:00.000Z",
+        messages: [
+          {
+            messageId: MessageId.makeUnsafe("msg-parent-user"),
+            role: "user",
+            text: "Parent user context that should not be fully copied into delegated children.",
+            attachments: [],
+            createdAt: "2026-03-12T00:00:00.100Z",
+            updatedAt: "2026-03-12T00:00:00.100Z",
+          },
+          {
+            messageId: MessageId.makeUnsafe("msg-parent-assistant"),
+            role: "assistant",
+            text: "Parent assistant reasoning that should stay out of delegated child history.",
+            attachments: [],
+            createdAt: "2026-03-12T00:00:00.200Z",
+            updatedAt: "2026-03-12T00:00:00.200Z",
+          },
+        ],
+        createdAt: "2026-03-12T00:00:00.050Z",
       }),
     );
 
@@ -206,15 +244,41 @@ describe("ThreadDelegationCoordinator", () => {
 
     await waitFor(async () => {
       const model = await Effect.runPromise(harness.engine.getReadModel());
-      const childThread = model.threads.find((thread) => thread.id !== "thread-parent");
-      return model.threads.length === 2 && (childThread?.messages.length ?? 0) > 0;
+      const childThread = model.threads.find(
+        (thread) => thread.id !== "thread-parent" && thread.id !== "thread-source",
+      );
+      return (
+        model.threads.length === 3 &&
+        (childThread?.messages.some((message) => message.role === "system") ?? false) &&
+        (childThread?.messages.some((message) => message.role === "user") ?? false)
+      );
     });
 
     const afterSpawn = await Effect.runPromise(harness.engine.getReadModel());
-    const childThread = afterSpawn.threads.find((thread) => thread.id !== "thread-parent");
+    const childThread = afterSpawn.threads.find(
+      (thread) => thread.id !== "thread-parent" && thread.id !== "thread-source",
+    );
     expect(childThread?.lineage.role).toBe("child");
-    expect(childThread?.messages.at(-1)?.role).toBe("user");
-    expect(afterSpawn.threads.find((thread) => thread.id === "thread-parent")?.delegationBatches).toHaveLength(1);
+    expect(childThread?.messages).toHaveLength(2);
+    expect(childThread?.messages[0]?.role).toBe("system");
+    expect(childThread?.messages[0]?.text).toContain("delegated child thread");
+    expect(childThread?.messages[0]?.text).toContain("Parent");
+    expect(childThread?.messages[1]?.role).toBe("user");
+    expect(childThread?.messages[1]?.text).toContain("Implement task 1");
+    expect(childThread?.messages[0]?.text).not.toContain(
+      "Parent user context that should not be fully copied",
+    );
+    expect(childThread?.messages[0]?.text).not.toContain(
+      "Parent assistant reasoning that should stay out",
+    );
+    expect(
+      childThread?.messages.some((message) =>
+        message.text.includes("Parent user context that should not be fully copied"),
+      ),
+    ).toBe(false);
+    expect(
+      afterSpawn.threads.find((thread) => thread.id === "thread-parent")?.delegationBatches,
+    ).toHaveLength(1);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -232,9 +296,62 @@ describe("ThreadDelegationCoordinator", () => {
     );
 
     await waitFor(() => harness.resolveToolCall.mock.calls.length === 1);
-    expect(harness.resolveToolCall.mock.calls[0]?.[0]).toMatchObject({
+    expect(harness.resolveToolCall.mock.calls[0]?.[0]).toEqual({
       threadId: "thread-parent",
       requestId: "req-delegate-1",
+      result: {
+        contentItems: [
+          {
+            type: "inputText",
+            text: expect.stringContaining('"batchId"'),
+          },
+        ],
+        success: true,
+      },
     });
+  });
+
+  it("accepts the live Codex item/tool/call payload shape for delegate_threads", async () => {
+    const harness = await createHarness();
+
+    await Effect.runPromise(
+      PubSub.publish(harness.runtimeEventPubSub, {
+        eventId: EventId.makeUnsafe("evt-delegate-tool-live-shape"),
+        provider: "codex",
+        type: "request.opened",
+        threadId: ThreadId.makeUnsafe("thread-parent"),
+        requestId: RuntimeRequestId.makeUnsafe("req-delegate-live-shape"),
+        createdAt: "2026-03-12T00:00:01.000Z",
+        payload: {
+          requestType: "dynamic_tool_call",
+          args: {
+            threadId: "provider-thread-1",
+            turnId: "provider-turn-1",
+            callId: "call-live-1",
+            tool: "delegate_threads",
+            arguments: {
+              concurrencyLimit: 1,
+              workspaceMode: "same-worktree",
+              tasks: [
+                {
+                  title: "Task 1",
+                  prompt: "Inspect the manager and report the result",
+                },
+              ],
+            },
+          },
+        },
+      } satisfies ProviderRuntimeEvent),
+    );
+
+    await waitFor(async () => {
+      const model = await Effect.runPromise(harness.engine.getReadModel());
+      return model.threads.length === 3;
+    });
+
+    const afterSpawn = await Effect.runPromise(harness.engine.getReadModel());
+    expect(
+      afterSpawn.threads.find((thread) => thread.id === "thread-parent")?.delegationBatches,
+    ).toHaveLength(1);
   });
 });

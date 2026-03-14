@@ -101,7 +101,9 @@ function resolveDefaultBrowserWsUrl(): string {
 
 export function resolveBrowserWsUrl(candidate?: string): string {
   const rawUrl =
-    typeof candidate === "string" && candidate.length > 0 ? candidate : resolveDefaultBrowserWsUrl();
+    typeof candidate === "string" && candidate.length > 0
+      ? candidate
+      : resolveDefaultBrowserWsUrl();
   if (rawUrl.length === 0) return rawUrl;
 
   const wsUrl = parseUrl(rawUrl);

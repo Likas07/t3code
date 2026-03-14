@@ -361,7 +361,9 @@ export function projectEvent(
               : {
                   ...thread,
                   delegationBatches: [
-                    ...thread.delegationBatches.filter((batch) => batch.batchId !== payload.batchId),
+                    ...thread.delegationBatches.filter(
+                      (batch) => batch.batchId !== payload.batchId,
+                    ),
                     {
                       batchId: payload.batchId,
                       parentThreadId: payload.parentThreadId,
@@ -435,7 +437,8 @@ export function projectEvent(
                           blockingRequestId: payload.blockingRequestId,
                           blockingKind: payload.blockingKind,
                           startedAt:
-                            child.startedAt ?? (payload.status === "running" ? payload.updatedAt : null),
+                            child.startedAt ??
+                            (payload.status === "running" ? payload.updatedAt : null),
                         },
                   ),
                 })),

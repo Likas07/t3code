@@ -670,7 +670,9 @@ export default function Sidebar() {
         }
 
         try {
-          const branchResult = await queryClient.fetchQuery(gitBranchesQueryOptions(threadProject.cwd));
+          const branchResult = await queryClient.fetchQuery(
+            gitBranchesQueryOptions(threadProject.cwd),
+          );
           const worktreeOptions = buildThreadWorktreeOptions({
             branches: branchResult.branches,
             projectCwd: threadProject.cwd,
@@ -698,7 +700,9 @@ export default function Sidebar() {
             return;
           }
 
-          const selectedWorktree = worktreeOptions.find((option) => option.id === selectedWorktreeId);
+          const selectedWorktree = worktreeOptions.find(
+            (option) => option.id === selectedWorktreeId,
+          );
           if (!selectedWorktree) {
             return;
           }

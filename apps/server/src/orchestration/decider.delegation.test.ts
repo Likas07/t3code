@@ -53,27 +53,27 @@ function makeParentThreadCreatedEvent(now: string): OrchestrationEvent {
     causationEventId: null,
     correlationId: CommandId.makeUnsafe("cmd-parent-thread"),
     metadata: {},
-        payload: {
-          threadId: asThreadId("thread-parent"),
-          projectId: asProjectId("project-1"),
-          title: "Parent",
-          model: "gpt-5-codex",
+    payload: {
+      threadId: asThreadId("thread-parent"),
+      projectId: asProjectId("project-1"),
+      title: "Parent",
+      model: "gpt-5-codex",
       runtimeMode: "full-access",
       interactionMode: "default",
-          branch: "feature/parent",
-          worktreePath: "/tmp/project/.worktree-parent",
-          fork: null,
-          lineage: {
-            rootThreadId: asThreadId("thread-parent"),
-            parentThreadId: null,
-            delegationDepth: 0,
-            role: "primary",
-            parentBatchId: null,
-            parentTaskIndex: null,
-          },
-          createdAt: now,
-          updatedAt: now,
-        },
+      branch: "feature/parent",
+      worktreePath: "/tmp/project/.worktree-parent",
+      fork: null,
+      lineage: {
+        rootThreadId: asThreadId("thread-parent"),
+        parentThreadId: null,
+        delegationDepth: 0,
+        role: "primary",
+        parentBatchId: null,
+        parentTaskIndex: null,
+      },
+      createdAt: now,
+      updatedAt: now,
+    },
   };
 }
 
@@ -81,7 +81,9 @@ describe("decider delegation", () => {
   it("emits parent delegation events and child thread creation for a materialized batch", async () => {
     const now = "2026-03-12T00:00:00.000Z";
     const initial = createEmptyReadModel(now);
-    const withProject = await Effect.runPromise(projectEvent(initial, makeProjectCreatedEvent(now)));
+    const withProject = await Effect.runPromise(
+      projectEvent(initial, makeProjectCreatedEvent(now)),
+    );
     const readModel = await Effect.runPromise(
       projectEvent(withProject, makeParentThreadCreatedEvent(now)),
     );

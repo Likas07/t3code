@@ -48,7 +48,8 @@ export function buildThreadWorktreeOptions(input: {
   }
 
   return options.toSorted((left, right) => {
-    const leftIsCurrent = left.branch === input.activeBranch && left.worktreePath === input.activeWorktreePath;
+    const leftIsCurrent =
+      left.branch === input.activeBranch && left.worktreePath === input.activeWorktreePath;
     const rightIsCurrent =
       right.branch === input.activeBranch && right.worktreePath === input.activeWorktreePath;
     if (leftIsCurrent !== rightIsCurrent) {
