@@ -17,7 +17,11 @@ const buildSourcemap =
 export default defineConfig({
   plugins: [
     tanstackRouter(),
-    react(),
+    react({
+      babel: {
+        plugins: ["babel-plugin-react-compiler"],
+      },
+    }),
     tailwindcss(),
   ],
   optimizeDeps: {
