@@ -79,6 +79,8 @@ delegationPolicy:
     - oracle
     - metis
     - momus
+    - hephaestus
+    - multimodal-looker
   maxDepth: 2
 tags:
   - orchestrator
