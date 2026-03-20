@@ -46,10 +46,11 @@ const makeAgentCatalogService = Effect.gen(function* () {
   // Bundled agents are shipped alongside the server build.
   // In dev:     {repoRoot}/apps/server/src/agent/Layers/ → ../../../../../agents
   // In build:   {repoRoot}/apps/server/dist/               → ../../../agents
-  // In desktop: {stageAppDir}/apps/server/dist/            → ../../../agents
-  // All cases: walk up from import.meta.dirname until we find an "agents" dir.
+  // In desktop: process.resourcesPath/agents  (extraResources in electron-builder)
   const serverDir = import.meta.dirname;
+  const resourcesPath = typeof process !== "undefined" ? (process as any).resourcesPath : undefined;
   const candidatePaths = [
+    ...(resourcesPath ? [pathService.resolve(resourcesPath, "agents")] : []), // Electron desktop
     pathService.resolve(serverDir, "..", "..", "..", "..", "..", "agents"), // dev (src/agent/Layers/)
     pathService.resolve(serverDir, "..", "..", "..", "agents"),            // built (dist/)
     pathService.resolve(serverDir, "..", "agents"),                        // flat layout
