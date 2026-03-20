@@ -1582,41 +1582,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             },
           });
 
-          // Emit a delegation.agent.spawned runtime event when the SDK reports
-          // a subagent / Agent tool call so that ProviderRuntimeIngestion can
-          // translate it into a delegation.batch.start orchestration command.
-          if (tool.itemType === "collab_agent_tool_call") {
-            const delegationStamp = yield* makeEventStamp();
-            yield* offerRuntimeEvent({
-              type: "delegation.agent.spawned",
-              eventId: delegationStamp.eventId,
-              provider: PROVIDER,
-              createdAt: delegationStamp.createdAt,
-              threadId: context.session.threadId,
-              ...(context.turnState
-                ? { turnId: asCanonicalTurnId(context.turnState.turnId) }
-                : {}),
-              itemId: asRuntimeItemId(tool.itemId),
-              payload: {
-                agentId: toolName,
-                subject: (toolInput as Record<string, unknown>).prompt
-                  ? String((toolInput as Record<string, unknown>).prompt).slice(0, 120)
-                  : toolName,
-                ...(tool.detail ? { description: tool.detail } : {}),
-                ...(typeof (toolInput as Record<string, unknown>).prompt === "string"
-                  ? { prompt: String((toolInput as Record<string, unknown>).prompt) }
-                  : {}),
-                toolName,
-                toolInput,
-              },
-              providerRefs: nativeProviderRefs(context, { providerItemId: tool.itemId }),
-              raw: {
-                source: "claude.sdk.message",
-                method: "claude/stream_event/content_block_start",
-                payload: message,
-              },
-            });
-          }
+          // NOTE: delegation.agent.spawned is emitted in handleUserMessage when
+          // the tool result arrives, since tool.input is {} at content_block_start.
           return;
         }
 
@@ -1690,6 +1657,39 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               payload: message,
             },
           });
+
+          // Emit delegation.agent.spawned now that tool.input has full content.
+          if (tool.itemType === "collab_agent_tool_call") {
+            const fullInput = tool.input as Record<string, unknown>;
+            const delegationStamp = yield* makeEventStamp();
+            yield* offerRuntimeEvent({
+              type: "delegation.agent.spawned",
+              eventId: delegationStamp.eventId,
+              provider: PROVIDER,
+              createdAt: delegationStamp.createdAt,
+              threadId: context.session.threadId,
+              ...(context.turnState
+                ? { turnId: asCanonicalTurnId(context.turnState.turnId) }
+                : {}),
+              itemId: asRuntimeItemId(tool.itemId),
+              payload: {
+                agentId: tool.toolName,
+                subject: typeof fullInput.prompt === "string"
+                  ? String(fullInput.prompt).slice(0, 120)
+                  : tool.toolName,
+                ...(typeof fullInput.description === "string"
+                  ? { description: String(fullInput.description) }
+                  : tool.detail
+                    ? { description: tool.detail }
+                    : {}),
+                ...(typeof fullInput.prompt === "string"
+                  ? { prompt: String(fullInput.prompt) }
+                  : {}),
+                toolName: tool.toolName,
+                toolInput: fullInput,
+              },
+            });
+          }
 
           const streamKind = toolResultStreamKind(tool.itemType);
           if (streamKind && toolResult.text.length > 0 && context.turnState) {
