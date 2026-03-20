@@ -43,10 +43,34 @@ const makeAgentCatalogService = Effect.gen(function* () {
   const pathService = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
 
-  const bundledAgentsDir = pathService.resolve(serverConfig.cwd, "agents");
+  // Bundled agents are shipped alongside the server build.
+  // In dev:     {repoRoot}/apps/server/src/agent/Layers/ → ../../../../../agents
+  // In build:   {repoRoot}/apps/server/dist/               → ../../../agents
+  // In desktop: {stageAppDir}/apps/server/dist/            → ../../../agents
+  // All cases: walk up from import.meta.dirname until we find an "agents" dir.
+  const serverDir = import.meta.dirname;
+  const candidatePaths = [
+    pathService.resolve(serverDir, "..", "..", "..", "..", "..", "agents"), // dev (src/agent/Layers/)
+    pathService.resolve(serverDir, "..", "..", "..", "agents"),            // built (dist/)
+    pathService.resolve(serverDir, "..", "agents"),                        // flat layout
+  ];
+  let bundledAgentsDir: string | null = null;
+  for (const candidate of candidatePaths) {
+    if (yield* fs.exists(candidate)) {
+      bundledAgentsDir = candidate;
+      break;
+    }
+  }
+  if (!bundledAgentsDir) {
+    yield* Effect.logWarning(
+      `No bundled agents directory found. Searched: ${candidatePaths.join(", ")}`,
+    );
+  }
   const projectAgentsDir = pathService.resolve(serverConfig.cwd, ".t3code", "agents");
 
-  const bundledAgents = yield* loadAgentsFromDirectory(bundledAgentsDir, fs, pathService);
+  const bundledAgents = bundledAgentsDir
+    ? yield* loadAgentsFromDirectory(bundledAgentsDir, fs, pathService)
+    : [];
   const projectAgents = yield* loadAgentsFromDirectory(projectAgentsDir, fs, pathService);
 
   const additionalLayers: AgentDefinition[][] = [];
