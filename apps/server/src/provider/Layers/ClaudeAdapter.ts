@@ -2613,6 +2613,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           canUseTool,
           env: process.env,
           ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
+          ...(input.systemPrompt
+            ? {
+                systemPrompt: {
+                  type: "preset" as const,
+                  preset: "claude_code" as const,
+                  append: input.systemPrompt,
+                },
+              }
+            : {}),
+          ...(input.disallowedTools ? { disallowedTools: [...input.disallowedTools] } : {}),
         };
 
         const queryRuntime = yield* Effect.try({
