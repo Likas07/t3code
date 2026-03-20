@@ -612,6 +612,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
   yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
 
+  // Copy bundled agent YAML definitions
+  const agentsSourceDir = path.join(repoRoot, "agents");
+  const agentsStageDir = path.join(stageAppDir, "agents");
+  if (yield* fs.exists(agentsSourceDir)) {
+    yield* fs.copy(agentsSourceDir, agentsStageDir);
+    yield* Effect.log("[desktop-artifact] Copied agent definitions");
+  }
+
   yield* assertPlatformBuildResources(options.platform, stageResourcesDir, options.verbose);
 
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
