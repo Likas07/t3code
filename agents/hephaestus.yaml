@@ -64,9 +64,9 @@ systemPrompt: |
   - When in doubt about an approach, prefer the simpler option.
 modelFallbackChain:
   - provider: codex
-    model: gpt-5.3-codex
-  - provider: codex
     model: gpt-5.4
+  - provider: codex
+    model: gpt-5.3-codex
   - provider: claudeAgent
     model: claude-opus-4-6
 delegationPolicy:

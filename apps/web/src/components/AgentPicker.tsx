@@ -12,6 +12,7 @@ import {
 } from "./ui/menu";
 import { cn } from "~/lib/utils";
 import { useAgentCatalog } from "~/hooks/useAgentCatalog";
+import { AgentCatalogDialog } from "./AgentCatalogDialog";
 
 export const AgentPicker = memo(function AgentPicker(props: {
   selectedAgentId: string | null;
@@ -29,6 +30,7 @@ export const AgentPicker = memo(function AgentPicker(props: {
   const label = selectedAgent ? selectedAgent.name : "No agent";
 
   return (
+    <span className="inline-flex items-center gap-0.5">
     <Menu
       open={isMenuOpen}
       onOpenChange={(open) => {
@@ -110,5 +112,7 @@ export const AgentPicker = memo(function AgentPicker(props: {
         </MenuGroup>
       </MenuPopup>
     </Menu>
+    <AgentCatalogDialog />
+    </span>
   );
 });
