@@ -60,6 +60,18 @@ export const ProviderSessionStartInput = Schema.Struct({
   runtimeMode: RuntimeMode,
   systemPrompt: Schema.optional(TrimmedNonEmptyString),
   disallowedTools: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  agentName: Schema.optional(TrimmedNonEmptyString),
+  agentSubAgents: Schema.optional(
+    Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        description: TrimmedNonEmptyString,
+        prompt: TrimmedNonEmptyString,
+        model: Schema.optional(TrimmedNonEmptyString),
+        disallowedTools: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+      }),
+    ),
+  ),
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 

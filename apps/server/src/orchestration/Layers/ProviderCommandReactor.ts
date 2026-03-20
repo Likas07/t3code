@@ -224,6 +224,8 @@ const make = Effect.gen(function* () {
       readonly providerOptions?: ProviderStartOptions;
       readonly systemPrompt?: string;
       readonly disallowedTools?: string[];
+      readonly agentName?: string;
+      readonly agentSubAgents?: Record<string, { description: string; prompt: string; model?: string; disallowedTools?: string[] }>;
     },
   ) {
     const readModel = yield* orchestrationEngine.getReadModel();
@@ -287,6 +289,8 @@ const make = Effect.gen(function* () {
         runtimeMode: desiredRuntimeMode,
         ...(options?.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
         ...(options?.disallowedTools ? { disallowedTools: options.disallowedTools } : {}),
+        ...(options?.agentName ? { agentName: options.agentName } : {}),
+        ...(options?.agentSubAgents ? { agentSubAgents: options.agentSubAgents } : {}),
       });
 
     const bindSessionToThread = (session: ProviderSession) =>
@@ -385,6 +389,8 @@ const make = Effect.gen(function* () {
     readonly createdAt: string;
     readonly systemPrompt?: string;
     readonly disallowedTools?: string[];
+    readonly agentName?: string;
+    readonly agentSubAgents?: Record<string, { description: string; prompt: string; model?: string; disallowedTools?: string[] }>;
   }) {
     const thread = yield* resolveThread(input.threadId);
     if (!thread) {
@@ -397,6 +403,8 @@ const make = Effect.gen(function* () {
       ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
       ...(input.systemPrompt !== undefined ? { systemPrompt: input.systemPrompt } : {}),
       ...(input.disallowedTools !== undefined ? { disallowedTools: input.disallowedTools } : {}),
+      ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+      ...(input.agentSubAgents !== undefined ? { agentSubAgents: input.agentSubAgents } : {}),
     });
     if (input.providerOptions !== undefined) {
       threadProviderOptions.set(input.threadId, input.providerOptions);
@@ -559,19 +567,44 @@ const make = Effect.gen(function* () {
       }
     }
 
-    // Resolve agent system prompt and tool policy for the provider session.
+    // Resolve agent config: system prompt, tool policy, and sub-agents
+    // that this agent can delegate to (registered natively with the SDK).
     let agentSystemPrompt: string | undefined;
     let agentDisallowedTools: string[] | undefined;
+    let agentName: string | undefined;
+    let agentSubAgents: Record<string, { description: string; prompt: string; model?: string; disallowedTools?: string[] }> | undefined;
 
     if (event.payload.agentId) {
       const agentDef = yield* agentCatalog.getAgent(event.payload.agentId);
       if (agentDef) {
         agentSystemPrompt = agentDef.systemPrompt;
-        if (agentDef.toolPolicy) {
-          if (agentDef.toolPolicy.restriction === "block") {
-            agentDisallowedTools = [...agentDef.toolPolicy.tools];
+        agentName = agentDef.id;
+        if (agentDef.toolPolicy?.restriction === "block") {
+          agentDisallowedTools = [...agentDef.toolPolicy.tools];
+        }
+
+        // Build sub-agents map from the delegation policy so the provider
+        // SDK natively registers them as dispatchable agents.
+        if (agentDef.delegationPolicy.canDelegate && agentDef.delegationPolicy.allowedSubAgents) {
+          const subAgentsMap: typeof agentSubAgents = {};
+          for (const subAgentId of agentDef.delegationPolicy.allowedSubAgents) {
+            const subDef = yield* agentCatalog.getAgent(subAgentId);
+            if (subDef) {
+              subAgentsMap[subDef.id] = {
+                description: subDef.description,
+                prompt: subDef.systemPrompt,
+                ...(subDef.modelFallbackChain.length > 0
+                  ? { model: subDef.modelFallbackChain[0]!.model }
+                  : {}),
+                ...(subDef.toolPolicy?.restriction === "block"
+                  ? { disallowedTools: [...subDef.toolPolicy.tools] }
+                  : {}),
+              };
+            }
           }
-          // For "allow" restriction, we'd need to compute the complement — skip for now
+          if (Object.keys(subAgentsMap).length > 0) {
+            agentSubAgents = subAgentsMap;
+          }
         }
       }
     }
@@ -592,6 +625,8 @@ const make = Effect.gen(function* () {
       createdAt: event.payload.createdAt,
       ...(agentSystemPrompt !== undefined ? { systemPrompt: agentSystemPrompt } : {}),
       ...(agentDisallowedTools !== undefined ? { disallowedTools: agentDisallowedTools } : {}),
+      ...(agentName !== undefined ? { agentName } : {}),
+      ...(agentSubAgents !== undefined ? { agentSubAgents } : {}),
     }).pipe(
       Effect.catchCause((cause) =>
         appendProviderFailureActivity({

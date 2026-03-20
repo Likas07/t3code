@@ -2613,16 +2613,44 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           canUseTool,
           env: process.env,
           ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
-          ...(input.systemPrompt
+          // When an agent is selected, register it natively with the SDK:
+          // - `agent`: sets the main thread's agent (applies prompt, tools, model)
+          // - `agents`: registers sub-agents as dispatchable via the Agent tool
+          // - Fallback to systemPrompt append if no agent name is set
+          ...(input.agentName && input.systemPrompt
             ? {
-                systemPrompt: {
-                  type: "preset" as const,
-                  preset: "claude_code" as const,
-                  append: input.systemPrompt,
-                },
+                agent: input.agentName,
+                agents: Object.fromEntries(
+                  [
+                    [input.agentName, {
+                      description: "Main agent for this thread",
+                      prompt: input.systemPrompt,
+                      ...(input.disallowedTools ? { disallowedTools: [...input.disallowedTools] } : {}),
+                    }],
+                    ...Object.entries(input.agentSubAgents ?? {}).map(([id, def]) => [
+                      id,
+                      {
+                        description: def.description,
+                        prompt: def.prompt,
+                        ...(def.model ? { model: def.model } : {}),
+                        ...(def.disallowedTools ? { disallowedTools: [...def.disallowedTools] } : {}),
+                      },
+                    ]),
+                  ],
+                ),
               }
-            : {}),
-          ...(input.disallowedTools ? { disallowedTools: [...input.disallowedTools] } : {}),
+            : input.systemPrompt
+              ? {
+                  systemPrompt: {
+                    type: "preset" as const,
+                    preset: "claude_code" as const,
+                    append: input.systemPrompt,
+                  },
+                  ...(input.disallowedTools ? { disallowedTools: [...input.disallowedTools] } : {}),
+                }
+              : input.disallowedTools
+                ? { disallowedTools: [...input.disallowedTools] }
+                : {}),
         };
 
         const queryRuntime = yield* Effect.try({
