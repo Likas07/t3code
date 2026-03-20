@@ -36,6 +36,7 @@ const DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS = 128;
 const DEFAULT_OPEN_COLS = 120;
 const DEFAULT_OPEN_ROWS = 30;
 const TERMINAL_ENV_BLOCKLIST = new Set(["PORT", "ELECTRON_RENDERER_PORT", "ELECTRON_RUN_AS_NODE"]);
+const OUTPUT_BUFFER_FLUSH_MS = 16;
 
 const decodeTerminalOpenInput = Schema.decodeUnknownSync(TerminalOpenInput);
 const decodeTerminalRestartInput = Schema.decodeUnknownSync(TerminalRestartInput);
@@ -341,6 +342,10 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private subprocessPollTimer: ReturnType<typeof setInterval> | null = null;
   private subprocessPollInFlight = false;
   private readonly killEscalationTimers = new Map<PtyProcess, ReturnType<typeof setTimeout>>();
+  private readonly outputBuffers = new Map<
+    string,
+    { chunks: string[]; timer: ReturnType<typeof setTimeout> }
+  >();
   private readonly logger = createLogger("terminal");
 
   constructor(options: TerminalManagerOptions) {
@@ -697,16 +702,42 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.history = capHistory(`${session.history}${data}`, this.historyLineLimit);
     session.updatedAt = new Date().toISOString();
     this.queuePersist(session.threadId, session.terminalId, session.history);
+
+    const bufferKey = `${session.threadId}:${session.terminalId}`;
+    let buffer = this.outputBuffers.get(bufferKey);
+    if (!buffer) {
+      buffer = {
+        chunks: [],
+        timer: setTimeout(() => this.flushOutputBuffer(session, bufferKey), OUTPUT_BUFFER_FLUSH_MS),
+      };
+      this.outputBuffers.set(bufferKey, buffer);
+    }
+    buffer.chunks.push(data);
+  }
+
+  private flushOutputBuffer(session: TerminalSessionState, bufferKey: string): void {
+    const buffer = this.outputBuffers.get(bufferKey);
+    if (!buffer || buffer.chunks.length === 0) {
+      this.outputBuffers.delete(bufferKey);
+      return;
+    }
+    const coalesced = buffer.chunks.join("");
+    clearTimeout(buffer.timer);
+    this.outputBuffers.delete(bufferKey);
     this.emitEvent({
       type: "output",
       threadId: session.threadId,
       terminalId: session.terminalId,
       createdAt: new Date().toISOString(),
-      data,
+      data: coalesced,
     });
   }
 
   private onProcessExit(session: TerminalSessionState, event: PtyExitEvent): void {
+    // Flush any buffered output before emitting exit so no data is lost.
+    const bufferKey = `${session.threadId}:${session.terminalId}`;
+    this.flushOutputBuffer(session, bufferKey);
+
     this.clearKillEscalationTimer(session.process);
     this.cleanupProcessHandles(session);
     session.process = null;

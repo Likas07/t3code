@@ -238,88 +238,125 @@ function attachmentPreviewRoutePath(attachmentId: string): string {
 
 // ── Pure state transition functions ────────────────────────────────────
 
+// Track the source updatedAt for each built Thread object to enable structural sharing.
+const threadSourceUpdatedAt = new WeakMap<Thread, string>();
+
+function buildThread(
+  thread: OrchestrationReadModel["threads"][number],
+  existing: Thread | undefined,
+): Thread {
+  return {
+    id: thread.id,
+    codexThreadId: null,
+    projectId: thread.projectId,
+    title: thread.title,
+    agentId: thread.agentId ?? null,
+    model: resolveModelSlugForProvider(
+      inferProviderForThreadModel({
+        model: thread.model,
+        sessionProviderName: thread.session?.providerName ?? null,
+      }),
+      thread.model,
+    ),
+    runtimeMode: thread.runtimeMode,
+    interactionMode: thread.interactionMode,
+    session: thread.session
+      ? {
+          provider: toLegacyProvider(thread.session.providerName),
+          status: toLegacySessionStatus(thread.session.status),
+          orchestrationStatus: thread.session.status,
+          activeTurnId: thread.session.activeTurnId ?? undefined,
+          createdAt: thread.session.updatedAt,
+          updatedAt: thread.session.updatedAt,
+          ...(thread.session.lastError ? { lastError: thread.session.lastError } : {}),
+        }
+      : null,
+    messages: thread.messages.map((message) => {
+      const attachments = message.attachments?.map((attachment) => ({
+        type: "image" as const,
+        id: attachment.id,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+        previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
+      }));
+      const normalizedMessage: ChatMessage = {
+        id: message.id,
+        role: message.role,
+        text: message.text,
+        createdAt: message.createdAt,
+        streaming: message.streaming,
+        ...(message.streaming ? {} : { completedAt: message.updatedAt }),
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      };
+      return normalizedMessage;
+    }),
+    proposedPlans: thread.proposedPlans.map((proposedPlan) => ({
+      id: proposedPlan.id,
+      turnId: proposedPlan.turnId,
+      planMarkdown: proposedPlan.planMarkdown,
+      implementedAt: proposedPlan.implementedAt,
+      implementationThreadId: proposedPlan.implementationThreadId,
+      createdAt: proposedPlan.createdAt,
+      updatedAt: proposedPlan.updatedAt,
+    })),
+    error: thread.session?.lastError ?? null,
+    createdAt: thread.createdAt,
+    latestTurn: thread.latestTurn,
+    lastVisitedAt: existing?.lastVisitedAt ?? thread.updatedAt,
+    branch: thread.branch,
+    worktreePath: thread.worktreePath,
+    turnDiffSummaries: thread.checkpoints.map((checkpoint) => ({
+      turnId: checkpoint.turnId,
+      completedAt: checkpoint.completedAt,
+      status: checkpoint.status,
+      assistantMessageId: checkpoint.assistantMessageId ?? undefined,
+      checkpointTurnCount: checkpoint.checkpointTurnCount,
+      checkpointRef: checkpoint.checkpointRef,
+      files: checkpoint.files.map((file) => ({ ...file })),
+    })),
+    activities: thread.activities.map((activity) => ({ ...activity })),
+    delegation: null, // TODO: map from thread.delegation once delegation schemas are on OrchestrationThread
+    delegationTasks: [], // TODO: map from thread.delegationTasks once delegation schemas are on OrchestrationThread
+  };
+}
+
 export function syncServerReadModel(state: AppState, readModel: OrchestrationReadModel): AppState {
   const projects = mapProjectsFromReadModel(
     readModel.projects.filter((project) => project.deletedAt === null),
     state.projects,
   );
   const existingThreadById = new Map(state.threads.map((thread) => [thread.id, thread] as const));
+  let allIdentical = state.threads.length > 0;
   const threads = readModel.threads
     .filter((thread) => thread.deletedAt === null)
     .map((thread) => {
       const existing = existingThreadById.get(thread.id);
-      return {
-        id: thread.id,
-        codexThreadId: null,
-        projectId: thread.projectId,
-        title: thread.title,
-        model: resolveModelSlugForProvider(
-          inferProviderForThreadModel({
-            model: thread.model,
-            sessionProviderName: thread.session?.providerName ?? null,
-          }),
-          thread.model,
-        ),
-        runtimeMode: thread.runtimeMode,
-        interactionMode: thread.interactionMode,
-        session: thread.session
-          ? {
-              provider: toLegacyProvider(thread.session.providerName),
-              status: toLegacySessionStatus(thread.session.status),
-              orchestrationStatus: thread.session.status,
-              activeTurnId: thread.session.activeTurnId ?? undefined,
-              createdAt: thread.session.updatedAt,
-              updatedAt: thread.session.updatedAt,
-              ...(thread.session.lastError ? { lastError: thread.session.lastError } : {}),
-            }
-          : null,
-        messages: thread.messages.map((message) => {
-          const attachments = message.attachments?.map((attachment) => ({
-            type: "image" as const,
-            id: attachment.id,
-            name: attachment.name,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-            previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
-          }));
-          const normalizedMessage: ChatMessage = {
-            id: message.id,
-            role: message.role,
-            text: message.text,
-            createdAt: message.createdAt,
-            streaming: message.streaming,
-            ...(message.streaming ? {} : { completedAt: message.updatedAt }),
-            ...(attachments && attachments.length > 0 ? { attachments } : {}),
-          };
-          return normalizedMessage;
-        }),
-        proposedPlans: thread.proposedPlans.map((proposedPlan) => ({
-          id: proposedPlan.id,
-          turnId: proposedPlan.turnId,
-          planMarkdown: proposedPlan.planMarkdown,
-          implementedAt: proposedPlan.implementedAt,
-          implementationThreadId: proposedPlan.implementationThreadId,
-          createdAt: proposedPlan.createdAt,
-          updatedAt: proposedPlan.updatedAt,
-        })),
-        error: thread.session?.lastError ?? null,
-        createdAt: thread.createdAt,
-        latestTurn: thread.latestTurn,
-        lastVisitedAt: existing?.lastVisitedAt ?? thread.updatedAt,
-        branch: thread.branch,
-        worktreePath: thread.worktreePath,
-        turnDiffSummaries: thread.checkpoints.map((checkpoint) => ({
-          turnId: checkpoint.turnId,
-          completedAt: checkpoint.completedAt,
-          status: checkpoint.status,
-          assistantMessageId: checkpoint.assistantMessageId ?? undefined,
-          checkpointTurnCount: checkpoint.checkpointTurnCount,
-          checkpointRef: checkpoint.checkpointRef,
-          files: checkpoint.files.map((file) => ({ ...file })),
-        })),
-        activities: thread.activities.map((activity) => ({ ...activity })),
-      };
+
+      // Structural sharing: if this thread hasn't changed, reuse the existing object.
+      if (existing && threadSourceUpdatedAt.get(existing) === thread.updatedAt) {
+        return existing;
+      }
+
+      allIdentical = false;
+      const built = buildThread(thread, existing);
+      threadSourceUpdatedAt.set(built, thread.updatedAt);
+      return built;
     });
+
+  // If every thread is referentially identical and the count matches, reuse the array.
+  if (allIdentical && threads.length === state.threads.length) {
+    const same = threads.every((t, i) => t === state.threads[i]);
+    if (same) {
+      return {
+        ...state,
+        projects,
+        threads: state.threads,
+        threadsHydrated: true,
+      };
+    }
+  }
+
   return {
     ...state,
     projects,

@@ -161,6 +161,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           project_id AS "projectId",
           title,
           model,
+          agent_id AS "agentId",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
           branch,
@@ -549,6 +550,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             model: row.model,
             runtimeMode: row.runtimeMode,
             interactionMode: row.interactionMode,
+            agentId: row.agentId ?? null,
             branch: row.branch,
             worktreePath: row.worktreePath,
             latestTurn: latestTurnByThread.get(row.threadId) ?? null,
@@ -560,6 +562,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             activities: activitiesByThread.get(row.threadId) ?? [],
             checkpoints: checkpointsByThread.get(row.threadId) ?? [],
             session: sessionsByThread.get(row.threadId) ?? null,
+            delegation: null,
+            delegationTasks: [],
           }));
 
           const snapshot = {

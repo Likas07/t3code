@@ -9,10 +9,15 @@ import { Effect, Schema } from "effect";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
+  DelegationBatchStartedPayload,
+  DelegationChildCompletedPayload,
   MessageSentPayloadSchema,
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
+  TaskCreatedPayload,
+  TaskDependencyAddedPayload,
+  TaskUpdatedPayload,
   ThreadActivityAppendedPayload,
   ThreadCreatedPayload,
   ThreadDeletedPayload,
@@ -253,6 +258,8 @@ export function projectEvent(
             projectId: payload.projectId,
             title: payload.title,
             model: payload.model,
+            agentId: payload.agentId,
+            delegation: payload.delegation,
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
             branch: payload.branch,
@@ -615,6 +622,132 @@ export function projectEvent(
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               activities,
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "delegation.batch-started":
+      return Effect.succeed(nextBase);
+
+    case "delegation.child-completed":
+      return decodeForEvent(
+        DelegationChildCompletedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const parentThread = nextBase.threads.find(
+            (entry) => entry.id === payload.parentThreadId,
+          );
+          if (!parentThread) {
+            return nextBase;
+          }
+
+          const updatedTasks = parentThread.delegationTasks.map((task) =>
+            task.id === payload.taskId
+              ? {
+                  ...task,
+                  status: payload.result === "completed" ? ("completed" as const) : ("pending" as const),
+                  updatedAt: payload.completedAt,
+                }
+              : task,
+          );
+
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.parentThreadId, {
+              delegationTasks: updatedTasks,
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "task.created":
+      return decodeForEvent(TaskCreatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              delegationTasks: [...thread.delegationTasks, payload.task],
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "task.updated":
+      return decodeForEvent(TaskUpdatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+
+          const updatedTasks = thread.delegationTasks.map((task) =>
+            task.id === payload.taskId
+              ? {
+                  ...task,
+                  status: payload.status,
+                  ...(payload.summary !== undefined ? { summary: payload.summary } : {}),
+                  updatedAt: payload.updatedAt,
+                }
+              : task,
+          );
+
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              delegationTasks: updatedTasks,
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "task.dependency-added":
+      return decodeForEvent(
+        TaskDependencyAddedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+
+          const updatedTasks = thread.delegationTasks.map((task) => {
+            if (task.id === payload.taskId) {
+              return {
+                ...task,
+                blockedBy: [...task.blockedBy, payload.blockedByTaskId],
+                updatedAt: payload.updatedAt,
+              };
+            }
+            if (task.id === payload.blockedByTaskId) {
+              return {
+                ...task,
+                blocks: [...task.blocks, payload.taskId],
+                updatedAt: payload.updatedAt,
+              };
+            }
+            return task;
+          });
+
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              delegationTasks: updatedTasks,
               updatedAt: event.occurredAt,
             }),
           };

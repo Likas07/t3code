@@ -33,7 +33,15 @@ import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { ProviderCommandReactorLive } from "./ProviderCommandReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
+import { AgentCatalogService } from "../../agent/Services/AgentCatalog.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+
+const AgentCatalogServiceTest = Layer.succeed(AgentCatalogService, {
+  getAgent: () => Effect.succeed(null),
+  listAgents: () => Effect.succeed([]),
+  getCatalog: () => Effect.succeed({ agents: [] }),
+  resolveModelForAgent: () => Effect.succeed(null),
+});
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId =>
@@ -225,6 +233,7 @@ describe("ProviderCommandReactor", () => {
         Layer.succeed(TextGeneration, { generateBranchName } as unknown as TextGenerationShape),
       ),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+      Layer.provideMerge(AgentCatalogServiceTest),
       Layer.provideMerge(NodeServices.layer),
     );
     const runtime = ManagedRuntime.make(layer);

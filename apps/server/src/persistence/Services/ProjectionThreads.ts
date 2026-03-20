@@ -7,6 +7,7 @@
  * @module ProjectionThreadRepository
  */
 import {
+  AgentId,
   IsoDateTime,
   ProjectId,
   ProviderInteractionMode,
@@ -24,6 +25,7 @@ export const ProjectionThread = Schema.Struct({
   projectId: ProjectId,
   title: Schema.String,
   model: Schema.String,
+  agentId: Schema.NullOr(AgentId),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(Schema.String),

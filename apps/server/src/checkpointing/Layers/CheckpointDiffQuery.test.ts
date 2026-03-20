@@ -46,6 +46,7 @@ function makeSnapshot(input: {
         model: "gpt-5-codex",
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "full-access",
+        agentId: null,
         branch: null,
         worktreePath: input.worktreePath,
         latestTurn: {
@@ -74,6 +75,8 @@ function makeSnapshot(input: {
           },
         ],
         session: null,
+        delegation: null,
+        delegationTasks: [],
       },
     ],
   };

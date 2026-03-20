@@ -44,6 +44,7 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly authToken: string | undefined;
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logWebSocketEvents: boolean;
+  readonly agentPaths?: readonly string[];
 }
 
 export const deriveServerPaths = Effect.fn(function* (

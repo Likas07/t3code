@@ -20,10 +20,11 @@ import { clearPromotedDraftThreads, useComposerDraftStore } from "../composerDra
 import { useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { terminalRunningSubprocessFromEvent } from "../terminalActivity";
-import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
+import { onOrchestrationSnapshot, onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import { createOrchestrationSyncTracker } from "../orchestrationSyncTracker";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -148,44 +149,42 @@ function EventRouter() {
     const api = readNativeApi();
     if (!api) return;
     let disposed = false;
-    let latestSequence = 0;
-    let syncing = false;
-    let pending = false;
+    const syncTracker = createOrchestrationSyncTracker();
     let needsProviderInvalidation = false;
 
-    const flushSnapshotSync = async (): Promise<void> => {
-      const snapshot = await api.orchestration.getSnapshot();
+    const applySnapshot = (snapshot: import("@t3tools/contracts").OrchestrationReadModel) => {
       if (disposed) return;
-      latestSequence = Math.max(latestSequence, snapshot.snapshotSequence);
       syncServerReadModel(snapshot);
       clearPromotedDraftThreads(new Set(snapshot.threads.map((t) => t.id)));
       const draftThreadIds = Object.keys(
         useComposerDraftStore.getState().draftThreadsByThreadId,
-      ) as ThreadId[];
+      ) as import("@t3tools/contracts").ThreadId[];
       const activeThreadIds = collectActiveTerminalThreadIds({
         snapshotThreads: snapshot.threads,
         draftThreadIds,
       });
       removeOrphanedTerminalStates(activeThreadIds);
-      if (pending) {
-        pending = false;
+    };
+
+    const flushSnapshotSync = async (): Promise<void> => {
+      const snapshot = await api.orchestration.getSnapshot();
+      if (disposed) return;
+      applySnapshot(snapshot);
+      if (syncTracker.finishSync(snapshot.snapshotSequence)) {
         await flushSnapshotSync();
       }
     };
 
     const syncSnapshot = async () => {
-      if (syncing) {
-        pending = true;
+      if (!syncTracker.beginSync()) {
         return;
       }
-      syncing = true;
-      pending = false;
       try {
         await flushSnapshotSync();
       } catch {
         // Keep prior state and wait for next domain event to trigger a resync.
+        syncTracker.failSync();
       }
-      syncing = false;
     };
 
     const domainEventFlushThrottler = new Throttler(
@@ -197,6 +196,9 @@ function EventRouter() {
           // reflects files created, deleted, or restored during this turn.
           void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
         }
+        // Only fall back to RPC if no snapshot push has been received for
+        // this domain event batch. The server pushes snapshots proactively,
+        // so in normal operation this RPC path is only used for initial load.
         void syncSnapshot();
       },
       {
@@ -207,15 +209,31 @@ function EventRouter() {
     );
 
     const unsubDomainEvent = api.orchestration.onDomainEvent((event) => {
-      if (event.sequence <= latestSequence) {
+      if (!syncTracker.observeDomainEvent(event.sequence)) {
         return;
       }
-      latestSequence = event.sequence;
       if (event.type === "thread.turn-diff-completed" || event.type === "thread.reverted") {
         needsProviderInvalidation = true;
       }
       domainEventFlushThrottler.maybeExecute();
     });
+
+    const unsubSnapshot = onOrchestrationSnapshot((snapshot) => {
+      if (disposed) return;
+      if (snapshot.snapshotSequence <= syncTracker.getAppliedSequence()) {
+        return;
+      }
+      // Cancel any pending RPC-based sync since the push is fresher.
+      domainEventFlushThrottler.cancel();
+      if (needsProviderInvalidation) {
+        needsProviderInvalidation = false;
+        void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
+        void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
+      }
+      syncTracker.finishSync(snapshot.snapshotSequence);
+      applySnapshot(snapshot);
+    });
+
     const unsubTerminalEvent = api.terminal.onEvent((event) => {
       const hasRunningSubprocess = terminalRunningSubprocessFromEvent(event);
       if (hasRunningSubprocess === null) {
@@ -306,6 +324,7 @@ function EventRouter() {
       needsProviderInvalidation = false;
       domainEventFlushThrottler.cancel();
       unsubDomainEvent();
+      unsubSnapshot();
       unsubTerminalEvent();
       unsubWelcome();
       unsubServerConfigUpdated();

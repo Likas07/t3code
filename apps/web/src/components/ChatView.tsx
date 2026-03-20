@@ -1,4 +1,5 @@
 import {
+  type AgentId,
   type ApprovalRequestId,
   DEFAULT_MODEL_BY_PROVIDER,
   type ClaudeCodeEffort,
@@ -149,6 +150,8 @@ import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./chat/ProviderModelPicker";
+import { AgentPicker } from "./AgentPicker";
+import { DelegationContextBanner } from "./chat/DelegationContextBanner";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./chat/ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./chat/CompactComposerControlsMenu";
@@ -341,7 +344,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
   // Used by "Implement in a new thread" to carry the sidebar-open intent across navigation.
   const planSidebarOpenOnNextThreadRef = useRef(false);
-  const [nowTick, setNowTick] = useState(() => Date.now());
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
   const [pullRequestDialogState, setPullRequestDialogState] =
@@ -593,6 +595,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
     ? (sessionProvider ?? selectedProviderByThreadId ?? null)
     : null;
   const selectedProvider: ProviderKind = lockedProvider ?? selectedProviderByThreadId ?? "codex";
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(
+    activeThread?.agentId ?? null,
+  );
   const baseThreadModel = resolveModelSlugForProvider(
     selectedProvider,
     activeThread?.model ?? activeProject?.model ?? getDefaultModel(selectedProvider),
@@ -661,7 +666,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const isSendBusy = sendPhase !== "idle";
   const isPreparingWorktree = sendPhase === "preparing-worktree";
   const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
-  const nowIso = new Date(nowTick).toISOString();
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
     activeThread?.session ?? null,
@@ -2047,16 +2051,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
       ? (draftThread?.envMode ?? "local")
       : "local";
 
-  useEffect(() => {
-    if (phase !== "running") return;
-    const timer = window.setInterval(() => {
-      setNowTick(Date.now());
-    }, 1000);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [phase]);
-
   const beginSendPhase = useCallback((nextPhase: Exclude<SendPhase, "idle">) => {
     setSendStartedAt((current) => current ?? new Date().toISOString());
     setSendPhase(nextPhase);
@@ -2549,6 +2543,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           projectId: activeProject.id,
           title,
           model: threadCreateModel,
+          ...(selectedAgentId ? { agentId: selectedAgentId as AgentId } : {}),
           runtimeMode,
           interactionMode,
           branch: nextThreadBranch,
@@ -2621,6 +2616,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           ? { modelOptions: selectedModelOptionsForDispatch }
           : {}),
         ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
+        ...(selectedAgentId ? { agentId: selectedAgentId as AgentId } : {}),
         provider: selectedProvider,
         assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
         runtimeMode,
@@ -2907,6 +2903,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
             ? { modelOptions: selectedModelOptionsForDispatch }
             : {}),
           ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
+          ...(selectedAgentId ? { agentId: selectedAgentId as AgentId } : {}),
           assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
           runtimeMode,
           interactionMode: nextInteractionMode,
@@ -3008,6 +3005,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         projectId: activeProject.id,
         title: nextThreadTitle,
         model: nextThreadModel,
+        ...(selectedAgentId ? { agentId: selectedAgentId as AgentId } : {}),
         runtimeMode,
         interactionMode: "default",
         branch: activeThread.branch,
@@ -3031,6 +3029,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
             ? { modelOptions: selectedModelOptionsForDispatch }
             : {}),
           ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
+          ...(selectedAgentId ? { agentId: selectedAgentId as AgentId } : {}),
           assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
           runtimeMode,
           interactionMode: "default",
@@ -3500,6 +3499,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
         error={activeThread.error}
         onDismiss={() => setThreadError(activeThread.id, null)}
       />
+      {/* Delegation context banner */}
+      <DelegationContextBanner thread={activeThread} allThreads={threads} />
       {/* Main content area with optional plan sidebar */}
       <div className="flex min-h-0 min-w-0 flex-1">
         {/* Chat column */}
@@ -3532,7 +3533,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
                 completionDividerBeforeEntryId={completionDividerBeforeEntryId}
                 completionSummary={completionSummary}
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-                nowIso={nowIso}
                 expandedWorkGroups={expandedWorkGroups}
                 onToggleWorkGroup={onToggleWorkGroup}
                 onOpenTurnDiff={onOpenTurnDiff}
@@ -3780,6 +3780,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
                               }
                             : {})}
                           onProviderModelChange={onProviderModelSelect}
+                        />
+
+                        <Separator
+                          orientation="vertical"
+                          className="mx-0.5 hidden h-4 sm:block"
+                        />
+                        <AgentPicker
+                          compact={isComposerFooterCompact}
+                          selectedAgentId={selectedAgentId}
+                          onSelectAgent={setSelectedAgentId}
                         />
 
                         {isComposerFooterCompact ? (

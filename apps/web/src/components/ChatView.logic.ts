@@ -39,6 +39,9 @@ export function buildLocalDraftThread(
     turnDiffSummaries: [],
     activities: [],
     proposedPlans: [],
+    agentId: null,
+    delegation: null,
+    delegationTasks: [],
   };
 }
 

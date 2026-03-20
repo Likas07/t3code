@@ -1,15 +1,18 @@
 import { Option, Schema, SchemaIssue, Struct } from "effect";
 import { ProviderModelOptions } from "./model";
 import {
+  AgentId,
   ApprovalRequestId,
   CheckpointRef,
   CommandId,
+  DelegationBatchId,
   EventId,
   IsoDateTime,
   MessageId,
   NonNegativeInt,
   ProjectId,
   ProviderItemId,
+  TaskId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
@@ -25,6 +28,7 @@ export const ORCHESTRATION_WS_METHODS = {
 
 export const ORCHESTRATION_WS_CHANNELS = {
   domainEvent: "orchestration.domainEvent",
+  snapshot: "orchestration.snapshot",
 } as const;
 
 export const ProviderKind = Schema.Literals(["codex", "claudeAgent"]);
@@ -269,11 +273,57 @@ export const OrchestrationLatestTurn = Schema.Struct({
 });
 export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 
+// ── Delegation Schemas ──────────────────────────────────────────
+
+export const DelegationLineage = Schema.Struct({
+  parentThreadId: ThreadId,
+  rootThreadId: ThreadId,
+  depth: NonNegativeInt,
+});
+export type DelegationLineage = typeof DelegationLineage.Type;
+
+export const DelegationTaskStatus = Schema.Literals(["pending", "in_progress", "completed", "deleted"]);
+export type DelegationTaskStatus = typeof DelegationTaskStatus.Type;
+
+export const DelegationTask = Schema.Struct({
+  id: TaskId,
+  threadId: ThreadId,
+  subject: TrimmedNonEmptyString,
+  description: Schema.optional(TrimmedNonEmptyString),
+  status: DelegationTaskStatus,
+  summary: Schema.optional(TrimmedNonEmptyString),
+  blockedBy: Schema.Array(TaskId),
+  blocks: Schema.Array(TaskId),
+  owner: Schema.optional(AgentId),
+  parentTaskId: Schema.optional(TaskId),
+  childThreadId: Schema.optional(ThreadId),
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type DelegationTask = typeof DelegationTask.Type;
+
+export const DelegationConfig = Schema.Struct({
+  maxParallelChildren: NonNegativeInt,
+  maxDepth: NonNegativeInt,
+  maxDescendantsPerRoot: NonNegativeInt,
+});
+export type DelegationConfig = typeof DelegationConfig.Type;
+
+export const DEFAULT_DELEGATION_CONFIG: DelegationConfig = {
+  maxParallelChildren: 3,
+  maxDepth: 2,
+  maxDescendantsPerRoot: 50,
+};
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   model: TrimmedNonEmptyString,
+  agentId: Schema.NullOr(AgentId).pipe(Schema.withDecodingDefault(() => null)),
+  delegation: Schema.NullOr(DelegationLineage).pipe(Schema.withDecodingDefault(() => null)),
+  delegationTasks: Schema.Array(DelegationTask).pipe(Schema.withDecodingDefault(() => [])),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
@@ -333,6 +383,7 @@ const ThreadCreateCommand = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   model: TrimmedNonEmptyString,
+  agentId: Schema.optional(AgentId),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
@@ -388,6 +439,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
   model: Schema.optional(TrimmedNonEmptyString),
   modelOptions: Schema.optional(ProviderModelOptions),
   providerOptions: Schema.optional(ProviderStartOptions),
+  agentId: Schema.optional(AgentId),
   assistantDeliveryMode: Schema.optional(AssistantDeliveryMode),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
   interactionMode: ProviderInteractionMode.pipe(
@@ -411,6 +463,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   model: Schema.optional(TrimmedNonEmptyString),
   modelOptions: Schema.optional(ProviderModelOptions),
   providerOptions: Schema.optional(ProviderStartOptions),
+  agentId: Schema.optional(AgentId),
   assistantDeliveryMode: Schema.optional(AssistantDeliveryMode),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
@@ -561,6 +614,70 @@ const ThreadRevertCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// ── Delegation Commands ──────────────────────────────────────────
+
+const DelegationBatchStartCommand = Schema.Struct({
+  type: Schema.Literal("delegation.batch.start"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  delegationId: DelegationBatchId,
+  children: Schema.Array(
+    Schema.Struct({
+      childThreadId: ThreadId,
+      taskId: TaskId,
+      agentId: AgentId,
+      subject: TrimmedNonEmptyString,
+      description: TrimmedNonEmptyString,
+    }),
+  ),
+  createdAt: IsoDateTime,
+});
+
+const DelegationChildCompleteCommand = Schema.Struct({
+  type: Schema.Literal("delegation.child.complete"),
+  commandId: CommandId,
+  childThreadId: ThreadId,
+  taskId: TaskId,
+  result: Schema.Literals(["completed", "failed", "interrupted"]),
+  summary: Schema.optional(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+
+export const TaskCreateCommand = Schema.Struct({
+  type: Schema.Literal("task.create"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  task: Schema.Struct({
+    id: TaskId,
+    subject: TrimmedNonEmptyString,
+    description: Schema.optional(TrimmedNonEmptyString),
+    status: DelegationTaskStatus,
+    blockedBy: Schema.Array(TaskId),
+    blocks: Schema.Array(TaskId),
+    owner: Schema.optional(AgentId),
+  }),
+  createdAt: IsoDateTime,
+});
+
+const TaskUpdateCommand = Schema.Struct({
+  type: Schema.Literal("task.update"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  taskId: TaskId,
+  status: DelegationTaskStatus,
+  summary: Schema.optional(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+
+const TaskDependencyAddCommand = Schema.Struct({
+  type: Schema.Literal("task.dependency.add"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  taskId: TaskId,
+  blockedByTaskId: TaskId,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -569,6 +686,11 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
+  DelegationBatchStartCommand,
+  DelegationChildCompleteCommand,
+  TaskCreateCommand,
+  TaskUpdateCommand,
+  TaskDependencyAddCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -599,10 +721,15 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
+  "delegation.batch-started",
+  "delegation.child-completed",
+  "task.created",
+  "task.updated",
+  "task.dependency-added",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
-export const OrchestrationAggregateKind = Schema.Literals(["project", "thread"]);
+export const OrchestrationAggregateKind = Schema.Literals(["project", "thread", "delegation", "task"]);
 export type OrchestrationAggregateKind = typeof OrchestrationAggregateKind.Type;
 export const OrchestrationActorKind = Schema.Literals(["client", "server", "provider"]);
 
@@ -635,6 +762,8 @@ export const ThreadCreatedPayload = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   model: TrimmedNonEmptyString,
+  agentId: Schema.NullOr(AgentId).pipe(Schema.withDecodingDefault(() => null)),
+  delegation: Schema.NullOr(DelegationLineage).pipe(Schema.withDecodingDefault(() => null)),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
@@ -692,6 +821,7 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
   model: Schema.optional(TrimmedNonEmptyString),
   modelOptions: Schema.optional(ProviderModelOptions),
   providerOptions: Schema.optional(ProviderStartOptions),
+  agentId: Schema.optional(AgentId),
   assistantDeliveryMode: Schema.optional(AssistantDeliveryMode),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
   interactionMode: ProviderInteractionMode.pipe(
@@ -771,6 +901,53 @@ export const OrchestrationEventMetadata = Schema.Struct({
   ingestedAt: Schema.optional(IsoDateTime),
 });
 export type OrchestrationEventMetadata = typeof OrchestrationEventMetadata.Type;
+
+// ── Delegation Event Payloads ───────────────────────────────────
+
+export const DelegationBatchStartedPayload = Schema.Struct({
+  threadId: ThreadId,
+  delegationId: DelegationBatchId,
+  children: Schema.Array(
+    Schema.Struct({
+      childThreadId: ThreadId,
+      taskId: TaskId,
+      agentId: AgentId,
+      subject: TrimmedNonEmptyString,
+      description: TrimmedNonEmptyString,
+    }),
+  ),
+  createdAt: IsoDateTime,
+});
+
+export const DelegationChildCompletedPayload = Schema.Struct({
+  childThreadId: ThreadId,
+  taskId: TaskId,
+  parentThreadId: ThreadId,
+  result: Schema.Literals(["completed", "failed", "interrupted"]),
+  summary: Schema.optional(TrimmedNonEmptyString),
+  completedAt: IsoDateTime,
+});
+
+export const TaskCreatedPayload = Schema.Struct({
+  threadId: ThreadId,
+  task: DelegationTask,
+  createdAt: IsoDateTime,
+});
+
+export const TaskUpdatedPayload = Schema.Struct({
+  threadId: ThreadId,
+  taskId: TaskId,
+  status: DelegationTaskStatus,
+  summary: Schema.optional(TrimmedNonEmptyString),
+  updatedAt: IsoDateTime,
+});
+
+export const TaskDependencyAddedPayload = Schema.Struct({
+  threadId: ThreadId,
+  taskId: TaskId,
+  blockedByTaskId: TaskId,
+  updatedAt: IsoDateTime,
+});
 
 const EventBaseFields = {
   sequence: NonNegativeInt,
@@ -884,6 +1061,31 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.activity-appended"),
     payload: ThreadActivityAppendedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("delegation.batch-started"),
+    payload: DelegationBatchStartedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("delegation.child-completed"),
+    payload: DelegationChildCompletedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("task.created"),
+    payload: TaskCreatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("task.updated"),
+    payload: TaskUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("task.dependency-added"),
+    payload: TaskDependencyAddedPayload,
   }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;

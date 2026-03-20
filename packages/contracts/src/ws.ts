@@ -4,6 +4,7 @@ import { NonNegativeInt, ProjectId, ThreadId, TrimmedNonEmptyString } from "./ba
 import {
   ClientOrchestrationCommand,
   OrchestrationEvent,
+  OrchestrationReadModel,
   ORCHESTRATION_WS_CHANNELS,
   OrchestrationGetFullThreadDiffInput,
   ORCHESTRATION_WS_METHODS,
@@ -75,6 +76,9 @@ export const WS_METHODS = {
   // Server meta
   serverGetConfig: "server.getConfig",
   serverUpsertKeybinding: "server.upsertKeybinding",
+
+  // Agent catalog
+  agentCatalogGet: "agent.catalog.get",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -139,6 +143,9 @@ const WebSocketRequestBody = Schema.Union([
   // Server meta
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
+
+  // Agent catalog
+  tagRequestBody(WS_METHODS.agentCatalogGet, Schema.Struct({})),
 ]);
 
 export const WebSocketRequest = Schema.Struct({
@@ -174,6 +181,7 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.serverConfigUpdated]: typeof ServerConfigUpdatedPayload.Type;
   readonly [WS_CHANNELS.terminalEvent]: typeof TerminalEvent.Type;
   readonly [ORCHESTRATION_WS_CHANNELS.domainEvent]: OrchestrationEvent;
+  readonly [ORCHESTRATION_WS_CHANNELS.snapshot]: OrchestrationReadModel;
 }
 
 export type WsPushChannel = keyof WsPushPayloadByChannel;
@@ -200,12 +208,17 @@ export const WsPushOrchestrationDomainEvent = makeWsPushSchema(
   ORCHESTRATION_WS_CHANNELS.domainEvent,
   OrchestrationEvent,
 );
+export const WsPushOrchestrationSnapshot = makeWsPushSchema(
+  ORCHESTRATION_WS_CHANNELS.snapshot,
+  OrchestrationReadModel,
+);
 
 export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.serverWelcome,
   WS_CHANNELS.serverConfigUpdated,
   WS_CHANNELS.terminalEvent,
   ORCHESTRATION_WS_CHANNELS.domainEvent,
+  ORCHESTRATION_WS_CHANNELS.snapshot,
 ]);
 export type WsPushChannelSchema = typeof WsPushChannelSchema.Type;
 
@@ -214,6 +227,7 @@ export const WsPush = Schema.Union([
   WsPushServerConfigUpdated,
   WsPushTerminalEvent,
   WsPushOrchestrationDomainEvent,
+  WsPushOrchestrationSnapshot,
 ]);
 export type WsPush = typeof WsPush.Type;
 

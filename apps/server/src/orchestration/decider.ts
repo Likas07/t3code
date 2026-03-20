@@ -2,11 +2,14 @@ import type {
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
+  OrchestrationThread,
 } from "@t3tools/contracts";
+import { DEFAULT_DELEGATION_CONFIG } from "@t3tools/contracts";
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
+  findThreadById,
   requireProject,
   requireProjectAbsent,
   requireThread,
@@ -157,6 +160,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           projectId: command.projectId,
           title: command.title,
           model: command.model,
+          agentId: command.agentId ?? null,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
           branch: command.branch,
@@ -329,6 +333,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.providerOptions !== undefined
             ? { providerOptions: command.providerOptions }
             : {}),
+          ...(command.agentId !== undefined ? { agentId: command.agentId } : {}),
           assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
           runtimeMode: targetThread.runtimeMode,
           interactionMode: targetThread.interactionMode,
@@ -627,6 +632,243 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           activity: command.activity,
+        },
+      };
+    }
+
+    case "delegation.batch.start": {
+      const parentThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+
+      const parentDepth = parentThread.delegation ? parentThread.delegation.depth : 0;
+      const childDepth = parentThread.delegation ? parentDepth + 1 : 1;
+
+      if (childDepth >= DEFAULT_DELEGATION_CONFIG.maxDepth) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Delegation depth ${childDepth} exceeds max depth ${DEFAULT_DELEGATION_CONFIG.maxDepth}.`,
+        });
+      }
+
+      const rootThreadId = parentThread.delegation
+        ? parentThread.delegation.rootThreadId
+        : parentThread.id;
+
+      const batchStartedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "delegation",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "delegation.batch-started",
+        payload: {
+          threadId: command.threadId,
+          delegationId: command.delegationId,
+          children: command.children,
+          createdAt: command.createdAt,
+        },
+      };
+
+      const childThreadEvents: ReadonlyArray<Omit<OrchestrationEvent, "sequence">> =
+        command.children.map((child) => ({
+          ...withEventBase({
+            aggregateKind: "thread" as const,
+            aggregateId: child.childThreadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "thread.created" as const,
+          payload: {
+            threadId: child.childThreadId,
+            projectId: parentThread.projectId,
+            title: child.subject,
+            model: parentThread.model,
+            agentId: child.agentId,
+            runtimeMode: parentThread.runtimeMode,
+            interactionMode: parentThread.interactionMode,
+            branch: parentThread.branch,
+            worktreePath: parentThread.worktreePath,
+            delegation: {
+              parentThreadId: parentThread.id,
+              rootThreadId,
+              depth: childDepth,
+            },
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+          },
+        }));
+
+      return [batchStartedEvent, ...childThreadEvents];
+    }
+
+    case "delegation.child.complete": {
+      const childThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.childThreadId,
+      });
+
+      if (!childThread.delegation) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.childThreadId}' has no delegation lineage.`,
+        });
+      }
+
+      const parentThread = findThreadById(readModel, childThread.delegation.parentThreadId);
+      if (!parentThread) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Parent thread '${childThread.delegation.parentThreadId}' does not exist.`,
+        });
+      }
+
+      const childCompletedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "delegation",
+          aggregateId: command.childThreadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "delegation.child-completed",
+        payload: {
+          childThreadId: command.childThreadId,
+          taskId: command.taskId,
+          parentThreadId: childThread.delegation.parentThreadId,
+          result: command.result,
+          ...(command.summary !== undefined ? { summary: command.summary } : {}),
+          completedAt: command.createdAt,
+        },
+      };
+
+      const taskUpdatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "task",
+          aggregateId: childThread.delegation.parentThreadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "task.updated",
+        payload: {
+          threadId: childThread.delegation.parentThreadId,
+          taskId: command.taskId,
+          status: command.result === "completed" ? "completed" : "pending",
+          ...(command.summary !== undefined ? { summary: command.summary } : {}),
+          updatedAt: command.createdAt,
+        },
+      };
+
+      return [childCompletedEvent, taskUpdatedEvent];
+    }
+
+    case "task.create": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "task",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "task.created",
+        payload: {
+          threadId: command.threadId,
+          task: {
+            id: command.task.id,
+            threadId: command.threadId,
+            subject: command.task.subject,
+            ...(command.task.description !== undefined
+              ? { description: command.task.description }
+              : {}),
+            status: command.task.status,
+            blockedBy: command.task.blockedBy,
+            blocks: command.task.blocks,
+            ...(command.task.owner !== undefined ? { owner: command.task.owner } : {}),
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+          },
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "task.update": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+
+      const existingTask = thread.delegationTasks.find((t) => t.id === command.taskId);
+      if (!existingTask) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Task '${command.taskId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+
+      return {
+        ...withEventBase({
+          aggregateKind: "task",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "task.updated",
+        payload: {
+          threadId: command.threadId,
+          taskId: command.taskId,
+          status: command.status,
+          ...(command.summary !== undefined ? { summary: command.summary } : {}),
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "task.dependency.add": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+
+      const task = thread.delegationTasks.find((t) => t.id === command.taskId);
+      if (!task) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Task '${command.taskId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+
+      const blockedByTask = thread.delegationTasks.find((t) => t.id === command.blockedByTaskId);
+      if (!blockedByTask) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Task '${command.blockedByTaskId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+
+      return {
+        ...withEventBase({
+          aggregateKind: "task",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "task.dependency-added",
+        payload: {
+          threadId: command.threadId,
+          taskId: command.taskId,
+          blockedByTaskId: command.blockedByTaskId,
+          updatedAt: command.createdAt,
         },
       };
     }

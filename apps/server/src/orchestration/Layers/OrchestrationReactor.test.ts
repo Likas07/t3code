@@ -2,6 +2,8 @@ import { Effect, Exit, Layer, ManagedRuntime, Scope } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
+import { DelegationCoordinator } from "../Services/DelegationCoordinator.ts";
+import { DelegationReactor } from "../Services/DelegationReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
@@ -46,6 +48,22 @@ describe("OrchestrationReactor", () => {
             drain: Effect.void,
           }),
         ),
+        Layer.provideMerge(
+          Layer.succeed(DelegationCoordinator, {
+            start: Effect.sync(() => {
+              started.push("delegation-coordinator");
+            }),
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(DelegationReactor, {
+            start: Effect.sync(() => {
+              started.push("delegation-reactor");
+            }),
+            drain: Effect.void,
+          }),
+        ),
       ),
     );
 
@@ -57,6 +75,8 @@ describe("OrchestrationReactor", () => {
       "provider-runtime-ingestion",
       "provider-command-reactor",
       "checkpoint-reactor",
+      "delegation-coordinator",
+      "delegation-reactor",
     ]);
 
     await Effect.runPromise(Scope.close(scope, Exit.void));

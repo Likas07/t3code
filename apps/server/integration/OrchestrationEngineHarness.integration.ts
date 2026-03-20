@@ -39,16 +39,23 @@ import { ProviderAdapterRegistry } from "../src/provider/Services/ProviderAdapte
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
 import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.ts";
 import { makeCodexAdapterLive } from "../src/provider/Layers/CodexAdapter.ts";
+import { makeClaudeAdapterLive } from "../src/provider/Layers/ClaudeAdapter.ts";
 import { CodexAdapter } from "../src/provider/Services/CodexAdapter.ts";
+import { ClaudeAdapter } from "../src/provider/Services/ClaudeAdapter.ts";
 import { ProviderService } from "../src/provider/Services/ProviderService.ts";
 import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
+import { DelegationCoordinator } from "../src/orchestration/Services/DelegationCoordinator.ts";
+import { DelegationCoordinatorLive } from "../src/orchestration/Layers/DelegationCoordinator.ts";
+import { DelegationReactor } from "../src/orchestration/Services/DelegationReactor.ts";
+import { DelegationReactorLive } from "../src/orchestration/Layers/DelegationReactor.ts";
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../src/orchestration/Layers/ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "../src/orchestration/Layers/ProjectionSnapshotQuery.ts";
 import { RuntimeReceiptBusLive } from "../src/orchestration/Layers/RuntimeReceiptBus.ts";
 import { OrchestrationReactorLive } from "../src/orchestration/Layers/OrchestrationReactor.ts";
 import { ProviderCommandReactorLive } from "../src/orchestration/Layers/ProviderCommandReactor.ts";
+import { AgentCatalogService } from "../src/agent/Services/AgentCatalog.ts";
 import { ProviderRuntimeIngestionLive } from "../src/orchestration/Layers/ProviderRuntimeIngestion.ts";
 import {
   OrchestrationEngineService,
@@ -209,6 +216,7 @@ export interface OrchestrationIntegrationHarness {
 interface MakeOrchestrationIntegrationHarnessOptions {
   readonly provider?: ProviderKind;
   readonly realCodex?: boolean;
+  readonly realClaude?: boolean;
 }
 
 export const makeOrchestrationIntegrationHarness = (
@@ -220,7 +228,9 @@ export const makeOrchestrationIntegrationHarness = (
 
     const provider = options?.provider ?? "codex";
     const useRealCodex = options?.realCodex === true;
-    const adapterHarness = useRealCodex
+    const useRealClaude = options?.realClaude === true;
+    const useRealProvider = useRealCodex || useRealClaude;
+    const adapterHarness = useRealProvider
       ? null
       : yield* makeTestProviderAdapterHarness({
           provider,
@@ -272,10 +282,29 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(providerSessionDirectoryLayer),
     );
-    const providerLayer = useRealCodex
+    const realClaudeRegistry = Layer.effect(
+      ProviderAdapterRegistry,
+      Effect.gen(function* () {
+        const claudeAdapter = yield* ClaudeAdapter;
+        return {
+          getByProvider: (resolvedProvider) =>
+            resolvedProvider === "claudeAgent"
+              ? Effect.succeed(claudeAdapter)
+              : Effect.fail(new ProviderUnsupportedError({ provider: resolvedProvider })),
+          listProviders: () => Effect.succeed(["claudeAgent"] as const),
+        } as typeof ProviderAdapterRegistry.Service;
+      }),
+    ).pipe(
+      Layer.provide(makeClaudeAdapterLive()),
+      Layer.provideMerge(ServerConfig.layerTest(workspaceDir, stateDir)),
+      Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(providerSessionDirectoryLayer),
+    );
+    const realRegistry = useRealClaude ? realClaudeRegistry : useRealCodex ? realCodexRegistry : null;
+    const providerLayer = realRegistry
       ? makeProviderServiceLive().pipe(
           Layer.provide(providerSessionDirectoryLayer),
-          Layer.provide(realCodexRegistry),
+          Layer.provide(realRegistry),
           Layer.provide(AnalyticsService.layerTest),
         )
       : makeProviderServiceLive().pipe(
@@ -303,18 +332,31 @@ export const makeOrchestrationIntegrationHarness = (
     const textGenerationLayer = Layer.succeed(TextGeneration, {
       generateBranchName: () => Effect.succeed({ branch: null }),
     } as unknown as TextGenerationShape);
+    const agentCatalogTestLayer = Layer.succeed(AgentCatalogService, {
+      getAgent: () => Effect.succeed(null),
+      listAgents: () => Effect.succeed([]),
+      getCatalog: () => Effect.succeed({ agents: [] }),
+      resolveModelForAgent: () => Effect.succeed(null),
+    });
     const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(gitCoreLayer),
       Layer.provideMerge(textGenerationLayer),
+      Layer.provideMerge(agentCatalogTestLayer),
     );
     const checkpointReactorLayer = CheckpointReactorLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
     );
+    // Use mock delegation services for now — real ones can be enabled once
+    // the DelegationCoordinator/Reactor stream subscriptions are verified stable.
+    const delegationCoordinatorLayer = Layer.succeed(DelegationCoordinator, { start: Effect.void, drain: Effect.void });
+    const delegationReactorLayer = Layer.succeed(DelegationReactor, { start: Effect.void, drain: Effect.void });
     const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
       Layer.provideMerge(runtimeIngestionLayer),
       Layer.provideMerge(providerCommandReactorLayer),
       Layer.provideMerge(checkpointReactorLayer),
+      Layer.provideMerge(delegationCoordinatorLayer),
+      Layer.provideMerge(delegationReactorLayer),
     );
     const layer = orchestrationReactorLayer.pipe(
       Layer.provide(persistenceLayer),

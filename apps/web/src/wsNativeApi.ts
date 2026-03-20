@@ -3,6 +3,7 @@ import {
   ORCHESTRATION_WS_METHODS,
   type ContextMenuItem,
   type NativeApi,
+  type OrchestrationReadModel,
   ServerConfigUpdatedPayload,
   WS_CHANNELS,
   WS_METHODS,
@@ -15,6 +16,7 @@ import { WsTransport } from "./wsTransport";
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
 const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
 const serverConfigUpdatedListeners = new Set<(payload: ServerConfigUpdatedPayload) => void>();
+const snapshotListeners = new Set<(payload: OrchestrationReadModel) => void>();
 
 /**
  * Subscribe to the server welcome message. If a welcome was already received
@@ -62,6 +64,15 @@ export function onServerConfigUpdated(
   };
 }
 
+export function onOrchestrationSnapshot(
+  listener: (payload: OrchestrationReadModel) => void,
+): () => void {
+  snapshotListeners.add(listener);
+  return () => {
+    snapshotListeners.delete(listener);
+  };
+}
+
 export function createWsNativeApi(): NativeApi {
   if (instance) return instance.api;
 
@@ -80,6 +91,16 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.serverConfigUpdated, (message) => {
     const payload = message.data;
     for (const listener of serverConfigUpdatedListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
+  transport.subscribe(ORCHESTRATION_WS_CHANNELS.snapshot, (message) => {
+    const payload = message.data;
+    for (const listener of snapshotListeners) {
       try {
         listener(payload);
       } catch {
@@ -174,6 +195,9 @@ export function createWsNativeApi(): NativeApi {
         transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) =>
           callback(message.data),
         ),
+    },
+    agent: {
+      getCatalog: () => transport.request(WS_METHODS.agentCatalogGet),
     },
   };
 
