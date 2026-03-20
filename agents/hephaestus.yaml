@@ -74,6 +74,8 @@ delegationPolicy:
   allowedSubAgents:
     - explore
     - librarian
+    - oracle
+    - multimodal-looker
   maxDepth: 1
 tags:
   - implementer
