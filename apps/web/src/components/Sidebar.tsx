@@ -1,6 +1,7 @@
 import {
   AlertCircle,
   ArrowLeftIcon,
+  ChevronDownIcon,
   ChevronRightIcon,
   FolderIcon,
   GitPullRequestIcon,
@@ -64,7 +65,7 @@ import {
 } from "./desktopUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
-import { Collapsible, CollapsibleContent } from "./ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   SidebarContent,
@@ -1631,57 +1632,71 @@ export default function Sidebar() {
                                       </div>
                                     </SidebarMenuSubButton>
                                   </SidebarMenuSubItem>
-                                  {/* Child threads (delegation) */}
-                                  {threads
-                                    .filter(
+                                  {/* Child threads (delegation) — collapsible */}
+                                  {(() => {
+                                    const childThreads = threads.filter(
                                       (child) =>
                                         child.delegation?.parentThreadId === thread.id,
-                                    )
-                                    .map((child) => {
-                                      const childHasPendingApproval = (() => {
-                                        const approvalRequested = child.activities?.filter(
-                                          (a) => a.kind === "approval.requested",
-                                        ) ?? [];
-                                        const approvalResolved = child.activities?.filter(
-                                          (a) => a.kind === "approval.resolved",
-                                        ) ?? [];
-                                        return approvalRequested.length > approvalResolved.length;
-                                      })();
-                                      return (
-                                      <SidebarMenuSubItem
-                                        key={child.id}
-                                        className="w-full"
-                                      >
-                                        <SidebarMenuSubButton
-                                          render={<div role="button" tabIndex={0} />}
-                                          size="sm"
-                                          isActive={child.id === routeThreadId}
-                                          className="h-7 w-full pl-6 text-left text-xs text-muted-foreground/60 hover:bg-accent hover:text-foreground/80"
-                                          onClick={(event) => {
-                                            handleThreadClick(
-                                              event,
-                                              child.id,
-                                              orderedProjectThreadIds,
-                                            );
-                                          }}
-                                        >
-                                          <span className="min-w-0 flex-1 truncate text-[11px]">
-                                            {child.title}
-                                          </span>
-                                          {childHasPendingApproval && (
-                                            <span title="Approval needed" className="inline-flex shrink-0">
-                                              <AlertCircle className="size-3 text-orange-500" />
-                                            </span>
-                                          )}
-                                          {child.agentId && (
-                                            <span className="ml-1 inline-flex shrink-0 items-center rounded bg-muted/60 px-1 py-0.5 text-[8px] font-medium leading-none text-muted-foreground/50">
-                                              {child.agentId}
-                                            </span>
-                                          )}
-                                        </SidebarMenuSubButton>
+                                    );
+                                    if (childThreads.length === 0) return null;
+                                    const hasActiveChild = childThreads.some(
+                                      (c) => c.id === routeThreadId,
+                                    );
+                                    return (
+                                      <SidebarMenuSubItem className="w-full">
+                                        <Collapsible defaultOpen={hasActiveChild}>
+                                          <CollapsibleTrigger className="flex h-6 w-full items-center gap-1 pl-5 text-[10px] text-muted-foreground/50 hover:text-muted-foreground/80">
+                                            <ChevronRightIcon className="size-3 shrink-0 transition-transform group-data-[state=open]/collapsible:hidden [[data-state=open]>&]:hidden [[data-state=open]>&]:rotate-90" />
+                                            <ChevronDownIcon className="hidden size-3 shrink-0 [[data-state=open]>&]:block" />
+                                            <span>{childThreads.length} sub-thread{childThreads.length !== 1 ? "s" : ""}</span>
+                                          </CollapsibleTrigger>
+                                          <CollapsibleContent>
+                                            {childThreads.map((child) => {
+                                              const childHasPendingApproval = (() => {
+                                                const requested = child.activities?.filter(
+                                                  (a) => a.kind === "approval.requested",
+                                                ).length ?? 0;
+                                                const resolved = child.activities?.filter(
+                                                  (a) => a.kind === "approval.resolved",
+                                                ).length ?? 0;
+                                                return requested > resolved;
+                                              })();
+                                              return (
+                                                <SidebarMenuSubButton
+                                                  key={child.id}
+                                                  render={<div role="button" tabIndex={0} />}
+                                                  size="sm"
+                                                  isActive={child.id === routeThreadId}
+                                                  className="h-7 w-full pl-8 text-left text-xs text-muted-foreground/60 hover:bg-accent hover:text-foreground/80"
+                                                  onClick={(event) => {
+                                                    handleThreadClick(
+                                                      event,
+                                                      child.id,
+                                                      orderedProjectThreadIds,
+                                                    );
+                                                  }}
+                                                >
+                                                  <span className="min-w-0 flex-1 truncate text-[11px]">
+                                                    {child.title}
+                                                  </span>
+                                                  {childHasPendingApproval && (
+                                                    <span title="Approval needed" className="inline-flex shrink-0">
+                                                      <AlertCircle className="size-3 text-orange-500" />
+                                                    </span>
+                                                  )}
+                                                  {child.agentId && (
+                                                    <span className="ml-1 inline-flex shrink-0 items-center rounded bg-primary/8 px-1 py-0.5 text-[8px] font-medium leading-none text-primary/60">
+                                                      {child.agentId.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+                                                    </span>
+                                                  )}
+                                                </SidebarMenuSubButton>
+                                              );
+                                            })}
+                                          </CollapsibleContent>
+                                        </Collapsible>
                                       </SidebarMenuSubItem>
-                                      );
-                                    })}
+                                    );
+                                  })()}
                                 </>
                                 );
                               })}
