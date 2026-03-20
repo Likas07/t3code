@@ -53,6 +53,7 @@ const readModel: OrchestrationReadModel = {
       model: "gpt-5-codex",
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
       runtimeMode: "full-access",
+      agentId: null,
       branch: null,
       worktreePath: null,
       createdAt: now,
@@ -64,6 +65,8 @@ const readModel: OrchestrationReadModel = {
       proposedPlans: [],
       checkpoints: [],
       deletedAt: null,
+      delegation: null,
+      delegationTasks: [],
     },
     {
       id: ThreadId.makeUnsafe("thread-2"),
@@ -72,6 +75,7 @@ const readModel: OrchestrationReadModel = {
       model: "gpt-5-codex",
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
       runtimeMode: "full-access",
+      agentId: null,
       branch: null,
       worktreePath: null,
       createdAt: now,
@@ -83,6 +87,8 @@ const readModel: OrchestrationReadModel = {
       proposedPlans: [],
       checkpoints: [],
       deletedAt: null,
+      delegation: null,
+      delegationTasks: [],
     },
   ],
 };

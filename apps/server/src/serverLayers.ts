@@ -12,6 +12,8 @@ import { OrchestrationEventStoreLive } from "./persistence/Layers/OrchestrationE
 import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime";
 import { OrchestrationEngineLive } from "./orchestration/Layers/OrchestrationEngine";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
+import { DelegationCoordinatorLive } from "./orchestration/Layers/DelegationCoordinator";
+import { DelegationReactorLive } from "./orchestration/Layers/DelegationReactor";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor";
 import { OrchestrationProjectionPipelineLive } from "./orchestration/Layers/ProjectionPipeline";
@@ -27,6 +29,7 @@ import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionD
 import { ProviderService } from "./provider/Services/ProviderService";
 import { makeEventNdjsonLogger } from "./provider/Layers/EventNdjsonLogger";
 
+import { AgentCatalogServiceLive } from "./agent/Layers/AgentCatalogLive";
 import { TerminalManagerLive } from "./terminal/Layers/Manager";
 import { KeybindingsLive } from "./keybindings";
 import { GitManagerLive } from "./git/Layers/GitManager";
@@ -98,18 +101,30 @@ export function makeServerRuntimeServicesLayer() {
   const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
+  const agentCatalogLayer = AgentCatalogServiceLive.pipe(
+    Layer.provideMerge(NodeServices.layer),
+  );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(gitCoreLayer),
     Layer.provideMerge(textGenerationLayer),
+    Layer.provideMerge(agentCatalogLayer),
   );
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+  const delegationCoordinatorLayer = DelegationCoordinatorLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+  const delegationReactorLayer = DelegationReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
   const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
     Layer.provideMerge(runtimeIngestionLayer),
     Layer.provideMerge(providerCommandReactorLayer),
     Layer.provideMerge(checkpointReactorLayer),
+    Layer.provideMerge(delegationCoordinatorLayer),
+    Layer.provideMerge(delegationReactorLayer),
   );
 
   const terminalLayer = TerminalManagerLive.pipe(
@@ -128,6 +143,7 @@ export function makeServerRuntimeServicesLayer() {
 
   return Layer.mergeAll(
     orchestrationReactorLayer,
+    agentCatalogLayer,
     gitCoreLayer,
     gitManagerLayer,
     terminalLayer,

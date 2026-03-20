@@ -18,6 +18,11 @@ import {
   ThreadApprovalResponseRequestedPayload as ContractsThreadApprovalResponseRequestedPayloadSchema,
   ThreadCheckpointRevertRequestedPayload as ContractsThreadCheckpointRevertRequestedPayloadSchema,
   ThreadSessionStopRequestedPayload as ContractsThreadSessionStopRequestedPayloadSchema,
+  DelegationBatchStartedPayload as ContractsDelegationBatchStartedPayloadSchema,
+  DelegationChildCompletedPayload as ContractsDelegationChildCompletedPayloadSchema,
+  TaskCreatedPayload as ContractsTaskCreatedPayloadSchema,
+  TaskUpdatedPayload as ContractsTaskUpdatedPayloadSchema,
+  TaskDependencyAddedPayload as ContractsTaskDependencyAddedPayloadSchema,
 } from "@t3tools/contracts";
 
 // Server-internal alias surface, backed by contract schemas as the source of truth.
@@ -46,3 +51,9 @@ export const ThreadApprovalResponseRequestedPayload =
 export const ThreadCheckpointRevertRequestedPayload =
   ContractsThreadCheckpointRevertRequestedPayloadSchema;
 export const ThreadSessionStopRequestedPayload = ContractsThreadSessionStopRequestedPayloadSchema;
+
+export const DelegationBatchStartedPayload = ContractsDelegationBatchStartedPayloadSchema;
+export const DelegationChildCompletedPayload = ContractsDelegationChildCompletedPayloadSchema;
+export const TaskCreatedPayload = ContractsTaskCreatedPayloadSchema;
+export const TaskUpdatedPayload = ContractsTaskUpdatedPayloadSchema;
+export const TaskDependencyAddedPayload = ContractsTaskDependencyAddedPayloadSchema;

@@ -55,6 +55,7 @@ import {
   formatInlineTerminalContextLabel,
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
+import { useNowTick } from "../../hooks/useNowTick";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
@@ -69,7 +70,6 @@ interface MessagesTimelineProps {
   completionDividerBeforeEntryId: string | null;
   completionSummary: string | null;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
-  nowIso: string;
   expandedWorkGroups: Record<string, boolean>;
   onToggleWorkGroup: (groupId: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -93,7 +93,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   completionDividerBeforeEntryId,
   completionSummary,
   turnDiffSummaryByAssistantMessageId,
-  nowIso,
   expandedWorkGroups,
   onToggleWorkGroup,
   onOpenTurnDiff,
@@ -511,12 +510,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   );
                 })()}
                 <p className="mt-1.5 text-[10px] text-muted-foreground/30">
-                  {formatMessageMeta(
-                    row.message.createdAt,
-                    row.message.streaming
-                      ? formatElapsed(row.durationStart, nowIso)
-                      : formatElapsed(row.durationStart, row.message.completedAt),
-                    timestampFormat,
+                  {row.message.streaming ? (
+                    <StreamingElapsed
+                      createdAt={row.message.createdAt}
+                      durationStart={row.durationStart}
+                      timestampFormat={timestampFormat}
+                    />
+                  ) : (
+                    formatMessageMeta(
+                      row.message.createdAt,
+                      formatElapsed(row.durationStart, row.message.completedAt),
+                      timestampFormat,
+                    )
                   )}
                 </p>
               </div>
@@ -543,9 +548,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:400ms]" />
             </span>
             <span>
-              {row.createdAt
-                ? `Working for ${formatWorkingTimer(row.createdAt, nowIso) ?? "0s"}`
-                : "Working..."}
+              {row.createdAt ? <WorkingTimer createdAt={row.createdAt} /> : "Working..."}
             </span>
           </div>
         </div>
@@ -659,6 +662,24 @@ function formatMessageMeta(
 ): string {
   if (!duration) return formatTimestamp(createdAt, timestampFormat);
   return `${formatTimestamp(createdAt, timestampFormat)} • ${duration}`;
+}
+
+function StreamingElapsed({
+  createdAt,
+  durationStart,
+  timestampFormat,
+}: {
+  createdAt: string;
+  durationStart: string;
+  timestampFormat: TimestampFormat;
+}) {
+  const nowIso = useNowTick(true);
+  return formatMessageMeta(createdAt, formatElapsed(durationStart, nowIso), timestampFormat);
+}
+
+function WorkingTimer({ createdAt }: { createdAt: string }) {
+  const nowIso = useNowTick(true);
+  return <>Working for {formatWorkingTimer(createdAt, nowIso) ?? "0s"}</>;
 }
 
 const UserMessageTerminalContextInlineLabel = memo(

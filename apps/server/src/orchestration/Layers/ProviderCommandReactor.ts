@@ -1,4 +1,5 @@
 import {
+  type AgentId,
   type ChatAttachment,
   CommandId,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
@@ -21,6 +22,7 @@ import { GitCore } from "../../git/Services/GitCore.ts";
 import { ProviderAdapterRequestError, ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { AgentCatalogService } from "../../agent/Services/AgentCatalog.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProviderCommandReactor,
@@ -142,6 +144,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
+  const agentCatalog = yield* AgentCatalogService;
   const git = yield* GitCore;
   const textGeneration = yield* TextGeneration;
   const handledTurnStartKeys = yield* Cache.make<string, true>({
@@ -520,14 +523,42 @@ const make = Effect.gen(function* () {
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
     }).pipe(Effect.forkScoped);
 
+    // Resolve provider/model from agent fallback chain if agentId is set
+    // and no explicit provider/model was specified in the command.
+    let resolvedProvider = event.payload.provider;
+    let resolvedModel = event.payload.model;
+    let resolvedModelOptions = event.payload.modelOptions;
+
+    if (event.payload.agentId && resolvedProvider === undefined && resolvedModel === undefined) {
+      // Determine which providers are currently available by checking active
+      // sessions. Fall back to both known providers if no sessions exist yet.
+      const activeSessions = yield* providerService.listSessions();
+      const activeProviders = [...new Set(activeSessions.map((s) => s.provider))];
+      const providersToCheck: readonly ProviderKind[] =
+        activeProviders.length > 0
+          ? activeProviders
+          : (["codex", "claudeAgent"] as const);
+      const agentModel = yield* agentCatalog.resolveModelForAgent(
+        event.payload.agentId,
+        providersToCheck,
+      );
+      if (agentModel) {
+        resolvedProvider = agentModel.provider;
+        resolvedModel = agentModel.model;
+        if (agentModel.modelOptions) {
+          resolvedModelOptions = agentModel.modelOptions;
+        }
+      }
+    }
+
     yield* sendTurnForThread({
       threadId: event.payload.threadId,
       messageText: message.text,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
-      ...(event.payload.provider !== undefined ? { provider: event.payload.provider } : {}),
-      ...(event.payload.model !== undefined ? { model: event.payload.model } : {}),
-      ...(event.payload.modelOptions !== undefined
-        ? { modelOptions: event.payload.modelOptions }
+      ...(resolvedProvider !== undefined ? { provider: resolvedProvider } : {}),
+      ...(resolvedModel !== undefined ? { model: resolvedModel } : {}),
+      ...(resolvedModelOptions !== undefined
+        ? { modelOptions: resolvedModelOptions }
         : {}),
       ...(event.payload.providerOptions !== undefined
         ? { providerOptions: event.payload.providerOptions }

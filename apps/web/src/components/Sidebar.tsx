@@ -1336,7 +1336,7 @@ export default function Sidebar() {
               >
                 {projects.map((project) => {
                   const projectThreads = threads
-                    .filter((thread) => thread.projectId === project.id)
+                    .filter((thread) => thread.projectId === project.id && !thread.delegation)
                     .toSorted((a, b) => {
                       const byDate =
                         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
@@ -1465,6 +1465,7 @@ export default function Sidebar() {
                                 );
 
                                 return (
+                                <>
                                   <SidebarMenuSubItem
                                     key={thread.id}
                                     className="w-full"
@@ -1598,6 +1599,11 @@ export default function Sidebar() {
                                             {thread.title}
                                           </span>
                                         )}
+                                        {thread.agentId && (
+                                          <span className="ml-1 inline-flex shrink-0 items-center rounded bg-primary/10 px-1 py-0.5 text-[9px] font-medium leading-none text-primary/70">
+                                            {thread.agentId.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+                                          </span>
+                                        )}
                                       </div>
                                       <div className="ml-auto flex shrink-0 items-center gap-1.5">
                                         {terminalStatus && (
@@ -1624,6 +1630,42 @@ export default function Sidebar() {
                                       </div>
                                     </SidebarMenuSubButton>
                                   </SidebarMenuSubItem>
+                                  {/* Child threads (delegation) */}
+                                  {threads
+                                    .filter(
+                                      (child) =>
+                                        child.delegation?.parentThreadId === thread.id,
+                                    )
+                                    .map((child) => (
+                                      <SidebarMenuSubItem
+                                        key={child.id}
+                                        className="w-full"
+                                      >
+                                        <SidebarMenuSubButton
+                                          render={<div role="button" tabIndex={0} />}
+                                          size="sm"
+                                          isActive={child.id === routeThreadId}
+                                          className="h-7 w-full pl-6 text-left text-xs text-muted-foreground/60 hover:bg-accent hover:text-foreground/80"
+                                          onClick={(event) => {
+                                            handleThreadClick(
+                                              event,
+                                              child.id,
+                                              orderedProjectThreadIds,
+                                            );
+                                          }}
+                                        >
+                                          <span className="min-w-0 flex-1 truncate text-[11px]">
+                                            {child.title}
+                                          </span>
+                                          {child.agentId && (
+                                            <span className="ml-1 inline-flex shrink-0 items-center rounded bg-muted/60 px-1 py-0.5 text-[8px] font-medium leading-none text-muted-foreground/50">
+                                              {child.agentId}
+                                            </span>
+                                          )}
+                                        </SidebarMenuSubButton>
+                                      </SidebarMenuSubItem>
+                                    ))}
+                                </>
                                 );
                               })}
 

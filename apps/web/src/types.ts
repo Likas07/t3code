@@ -91,6 +91,7 @@ export interface Thread {
   projectId: ProjectId;
   title: string;
   model: string;
+  agentId: string | null;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
   session: ThreadSession | null;
@@ -104,6 +105,16 @@ export interface Thread {
   worktreePath: string | null;
   turnDiffSummaries: TurnDiffSummary[];
   activities: OrchestrationThreadActivity[];
+  delegation: { parentThreadId: string; rootThreadId: string; depth: number } | null;
+  delegationTasks: Array<{
+    id: string;
+    subject: string;
+    status: "pending" | "in_progress" | "completed" | "deleted";
+    blockedBy: string[];
+    blocks: string[];
+    owner?: string;
+    childThreadId?: string;
+  }>;
 }
 
 export interface ThreadSession {

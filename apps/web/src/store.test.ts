@@ -29,6 +29,9 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     latestTurn: null,
     branch: null,
     worktreePath: null,
+    agentId: null,
+    delegation: null,
+    delegationTasks: [],
     ...overrides,
   };
 }
@@ -56,6 +59,9 @@ function makeReadModelThread(overrides: Partial<OrchestrationReadModel["threads"
     projectId: ProjectId.makeUnsafe("project-1"),
     title: "Thread",
     model: "gpt-5.3-codex",
+    agentId: null,
+    delegation: null,
+    delegationTasks: [],
     runtimeMode: DEFAULT_RUNTIME_MODE,
     interactionMode: DEFAULT_INTERACTION_MODE,
     branch: null,

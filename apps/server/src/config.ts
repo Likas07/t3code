@@ -28,6 +28,7 @@ export interface ServerConfigShape {
   readonly authToken: string | undefined;
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logWebSocketEvents: boolean;
+  readonly agentPaths?: readonly string[];
 }
 
 /**

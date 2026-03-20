@@ -421,6 +421,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             projectId: event.payload.projectId,
             title: event.payload.title,
             model: event.payload.model,
+            agentId: event.payload.agentId,
             runtimeMode: event.payload.runtimeMode,
             interactionMode: event.payload.interactionMode,
             branch: event.payload.branch,

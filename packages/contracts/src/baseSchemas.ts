@@ -42,3 +42,12 @@ export const ApprovalRequestId = makeEntityId("ApprovalRequestId");
 export type ApprovalRequestId = typeof ApprovalRequestId.Type;
 export const CheckpointRef = makeEntityId("CheckpointRef");
 export type CheckpointRef = typeof CheckpointRef.Type;
+
+export const AgentId = makeEntityId("AgentId");
+export type AgentId = typeof AgentId.Type;
+
+export const TaskId = makeEntityId("TaskId");
+export type TaskId = typeof TaskId.Type;
+
+export const DelegationBatchId = makeEntityId("DelegationBatchId");
+export type DelegationBatchId = typeof DelegationBatchId.Type;

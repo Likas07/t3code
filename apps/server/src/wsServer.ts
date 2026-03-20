@@ -58,6 +58,7 @@ import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { clamp } from "effect/Number";
 import { Open, resolveAvailableEditors } from "./open";
+import { AgentCatalogService } from "./agent/Services/AgentCatalog";
 import { ServerConfig } from "./config";
 import { GitCore } from "./git/Services/GitCore.ts";
 import { tryHandleProjectFaviconRequest } from "./projectFaviconRoute";
@@ -212,6 +213,7 @@ export type ServerCoreRuntimeServices =
 
 export type ServerRuntimeServices =
   | ServerCoreRuntimeServices
+  | AgentCatalogService
   | GitManager
   | GitCore
   | TerminalManager
@@ -255,6 +257,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const keybindingsManager = yield* Keybindings;
   const providerHealth = yield* ProviderHealth;
   const git = yield* GitCore;
+  const agentCatalog = yield* AgentCatalogService;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
@@ -607,8 +610,60 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const subscriptionsScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(subscriptionsScope, Exit.void));
 
+  // ── Snapshot push debounce ────────────────────────────────────────────
+  const IMMEDIATE_EVENT_TYPES = new Set([
+    "thread.approval-response-requested",
+    "thread.user-input-response-requested",
+    "thread.session-set",
+    "thread.session-stop-requested",
+    "thread.reverted",
+  ]);
+  const DEBOUNCE_IDLE_MS = 100;
+  const DEBOUNCE_STREAMING_MS = 300;
+  let snapshotPushTimer: ReturnType<typeof setTimeout> | null = null;
+  let hasActiveRunningTurn = false;
+
+  const pushSnapshotNow = Effect.gen(function* () {
+    const snapshot = yield* projectionReadModelQuery.getSnapshot();
+    hasActiveRunningTurn = snapshot.threads.some(
+      (t) => t.session?.status === "running",
+    );
+    yield* pushBus.publishAll(ORCHESTRATION_WS_CHANNELS.snapshot, snapshot);
+  });
+
+  const scheduleSnapshotPush = () => {
+    const delayMs = hasActiveRunningTurn ? DEBOUNCE_STREAMING_MS : DEBOUNCE_IDLE_MS;
+    if (snapshotPushTimer !== null) {
+      clearTimeout(snapshotPushTimer);
+    }
+    snapshotPushTimer = setTimeout(() => {
+      snapshotPushTimer = null;
+      Effect.runFork(pushSnapshotNow.pipe(Effect.provideService(ProjectionSnapshotQuery, projectionReadModelQuery)));
+    }, delayMs);
+  };
+
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      if (snapshotPushTimer !== null) {
+        clearTimeout(snapshotPushTimer);
+        snapshotPushTimer = null;
+      }
+    }),
+  );
+
   yield* Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) =>
-    pushBus.publishAll(ORCHESTRATION_WS_CHANNELS.domainEvent, event),
+    Effect.gen(function* () {
+      yield* pushBus.publishAll(ORCHESTRATION_WS_CHANNELS.domainEvent, event);
+      if (IMMEDIATE_EVENT_TYPES.has(event.type)) {
+        if (snapshotPushTimer !== null) {
+          clearTimeout(snapshotPushTimer);
+          snapshotPushTimer = null;
+        }
+        yield* pushSnapshotNow;
+      } else {
+        scheduleSnapshotPush();
+      }
+    }),
   ).pipe(Effect.forkIn(subscriptionsScope));
 
   yield* Stream.runForEach(keybindingsManager.streamChanges, (event) =>
@@ -882,6 +937,9 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         const keybindingsConfig = yield* keybindingsManager.upsertKeybindingRule(body);
         return { keybindings: keybindingsConfig, issues: [] };
       }
+
+      case WS_METHODS.agentCatalogGet:
+        return yield* agentCatalog.getCatalog();
 
       default: {
         const _exhaustiveCheck: never = request.body;
