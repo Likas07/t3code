@@ -1,4 +1,5 @@
 import {
+  AlertCircle,
   ArrowLeftIcon,
   ChevronRightIcon,
   FolderIcon,
@@ -1636,7 +1637,17 @@ export default function Sidebar() {
                                       (child) =>
                                         child.delegation?.parentThreadId === thread.id,
                                     )
-                                    .map((child) => (
+                                    .map((child) => {
+                                      const childHasPendingApproval = (() => {
+                                        const approvalRequested = child.activities?.filter(
+                                          (a) => a.kind === "approval.requested",
+                                        ) ?? [];
+                                        const approvalResolved = child.activities?.filter(
+                                          (a) => a.kind === "approval.resolved",
+                                        ) ?? [];
+                                        return approvalRequested.length > approvalResolved.length;
+                                      })();
+                                      return (
                                       <SidebarMenuSubItem
                                         key={child.id}
                                         className="w-full"
@@ -1657,6 +1668,11 @@ export default function Sidebar() {
                                           <span className="min-w-0 flex-1 truncate text-[11px]">
                                             {child.title}
                                           </span>
+                                          {childHasPendingApproval && (
+                                            <span title="Approval needed" className="inline-flex shrink-0">
+                                              <AlertCircle className="size-3 text-orange-500" />
+                                            </span>
+                                          )}
                                           {child.agentId && (
                                             <span className="ml-1 inline-flex shrink-0 items-center rounded bg-muted/60 px-1 py-0.5 text-[8px] font-medium leading-none text-muted-foreground/50">
                                               {child.agentId}
@@ -1664,7 +1680,8 @@ export default function Sidebar() {
                                           )}
                                         </SidebarMenuSubButton>
                                       </SidebarMenuSubItem>
-                                    ))}
+                                      );
+                                    })}
                                 </>
                                 );
                               })}

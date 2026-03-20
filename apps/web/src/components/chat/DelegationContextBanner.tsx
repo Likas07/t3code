@@ -35,7 +35,7 @@ export const DelegationContextBanner = memo(function DelegationContextBanner({
       ?.replace(/-/g, " ")
       .replace(/\b\w/g, (c) => c.toUpperCase());
     return (
-      <div className="mx-3 mt-2 sm:mx-5">
+      <div className="mx-3 mt-2 sm:mx-5" role="status" aria-live="polite">
         <div className="mx-auto flex max-w-3xl items-center gap-2 rounded-md border border-border/50 bg-muted/50 px-3 py-2 text-sm">
           <ArrowLeftIcon className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="text-muted-foreground">
@@ -60,7 +60,7 @@ export const DelegationContextBanner = memo(function DelegationContextBanner({
   // Parent thread with active delegation tasks
   if (taskProgress && taskProgress.total > 0) {
     return (
-      <div className="mx-3 mt-2 sm:mx-5">
+      <div className="mx-3 mt-2 sm:mx-5" role="status" aria-live="polite">
         <div className="mx-auto max-w-3xl rounded-md border border-border/50 bg-muted/50">
           <button
             type="button"

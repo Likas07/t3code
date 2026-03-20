@@ -26,9 +26,9 @@ export const TaskListView = memo(function TaskListView({ tasks }: TaskListViewPr
   if (!tasks || tasks.length === 0) return null;
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1" role="list" aria-live="polite">
       {tasks.map((task) => (
-        <div key={task.id} className="flex items-center gap-2 rounded px-2 py-1 text-sm">
+        <div key={task.id} role="listitem" className="flex items-center gap-2 rounded px-2 py-1 text-sm">
           {taskStatusIcon(task.status)}
           <span className="truncate">{task.subject}</span>
           {task.owner && (
