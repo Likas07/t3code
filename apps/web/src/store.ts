@@ -316,8 +316,22 @@ function buildThread(
       files: checkpoint.files.map((file) => ({ ...file })),
     })),
     activities: thread.activities.map((activity) => ({ ...activity })),
-    delegation: null, // TODO: map from thread.delegation once delegation schemas are on OrchestrationThread
-    delegationTasks: [], // TODO: map from thread.delegationTasks once delegation schemas are on OrchestrationThread
+    delegation: thread.delegation
+      ? {
+          parentThreadId: thread.delegation.parentThreadId,
+          rootThreadId: thread.delegation.rootThreadId,
+          depth: thread.delegation.depth,
+        }
+      : null,
+    delegationTasks: (thread.delegationTasks ?? []).map((task) => ({
+      id: task.id,
+      subject: task.subject,
+      status: task.status,
+      blockedBy: [...task.blockedBy],
+      blocks: [...task.blocks],
+      ...(task.owner ? { owner: task.owner } : {}),
+      ...(task.childThreadId ? { childThreadId: task.childThreadId } : {}),
+    })),
   };
 }
 
