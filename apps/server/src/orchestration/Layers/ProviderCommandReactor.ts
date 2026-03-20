@@ -222,6 +222,8 @@ const make = Effect.gen(function* () {
       readonly model?: string;
       readonly modelOptions?: ProviderModelOptions;
       readonly providerOptions?: ProviderStartOptions;
+      readonly systemPrompt?: string;
+      readonly disallowedTools?: string[];
     },
   ) {
     const readModel = yield* orchestrationEngine.getReadModel();
@@ -283,6 +285,8 @@ const make = Effect.gen(function* () {
           : {}),
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
+        ...(options?.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
+        ...(options?.disallowedTools ? { disallowedTools: options.disallowedTools } : {}),
       });
 
     const bindSessionToThread = (session: ProviderSession) =>
@@ -379,6 +383,8 @@ const make = Effect.gen(function* () {
     readonly providerOptions?: ProviderStartOptions;
     readonly interactionMode?: "default" | "plan";
     readonly createdAt: string;
+    readonly systemPrompt?: string;
+    readonly disallowedTools?: string[];
   }) {
     const thread = yield* resolveThread(input.threadId);
     if (!thread) {
@@ -389,6 +395,8 @@ const make = Effect.gen(function* () {
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.modelOptions !== undefined ? { modelOptions: input.modelOptions } : {}),
       ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+      ...(input.systemPrompt !== undefined ? { systemPrompt: input.systemPrompt } : {}),
+      ...(input.disallowedTools !== undefined ? { disallowedTools: input.disallowedTools } : {}),
     });
     if (input.providerOptions !== undefined) {
       threadProviderOptions.set(input.threadId, input.providerOptions);
@@ -551,6 +559,23 @@ const make = Effect.gen(function* () {
       }
     }
 
+    // Resolve agent system prompt and tool policy for the provider session.
+    let agentSystemPrompt: string | undefined;
+    let agentDisallowedTools: string[] | undefined;
+
+    if (event.payload.agentId) {
+      const agentDef = yield* agentCatalog.getAgent(event.payload.agentId);
+      if (agentDef) {
+        agentSystemPrompt = agentDef.systemPrompt;
+        if (agentDef.toolPolicy) {
+          if (agentDef.toolPolicy.restriction === "block") {
+            agentDisallowedTools = [...agentDef.toolPolicy.tools];
+          }
+          // For "allow" restriction, we'd need to compute the complement — skip for now
+        }
+      }
+    }
+
     yield* sendTurnForThread({
       threadId: event.payload.threadId,
       messageText: message.text,
@@ -565,6 +590,8 @@ const make = Effect.gen(function* () {
         : {}),
       interactionMode: event.payload.interactionMode,
       createdAt: event.payload.createdAt,
+      ...(agentSystemPrompt !== undefined ? { systemPrompt: agentSystemPrompt } : {}),
+      ...(agentDisallowedTools !== undefined ? { disallowedTools: agentDisallowedTools } : {}),
     }).pipe(
       Effect.catchCause((cause) =>
         appendProviderFailureActivity({

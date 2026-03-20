@@ -1318,6 +1318,12 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         }),
     );
 
+    // Track per-session agent system prompt to prepend to the first turn.
+    const sessionAgentPrompts = new Map<
+      string,
+      { systemPrompt: string | undefined; disallowedTools: readonly string[] | undefined; applied: boolean }
+    >();
+
     const startSession: CodexAdapterShape["startSession"] = (input) => {
       if (input.provider !== undefined && input.provider !== PROVIDER) {
         return Effect.fail(
@@ -1327,6 +1333,15 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
           }),
         );
+      }
+
+      // Store agent system prompt and disallowed tools for later injection.
+      if (input.systemPrompt || input.disallowedTools) {
+        sessionAgentPrompts.set(input.threadId, {
+          systemPrompt: input.systemPrompt,
+          disallowedTools: input.disallowedTools,
+          applied: false,
+        });
       }
 
       const managerInput: CodexAppServerStartSessionInput = {
@@ -1388,11 +1403,32 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           { concurrency: 1 },
         );
 
+        // Prepend agent system prompt to the first turn for this session.
+        let effectiveInput = input.input;
+        const agentPromptState = sessionAgentPrompts.get(input.threadId);
+        if (agentPromptState && !agentPromptState.applied) {
+          agentPromptState.applied = true;
+          const parts: string[] = [];
+          if (agentPromptState.systemPrompt) {
+            parts.push(`[System Instructions]\n${agentPromptState.systemPrompt}\n[End System Instructions]`);
+          }
+          if (agentPromptState.disallowedTools && agentPromptState.disallowedTools.length > 0) {
+            parts.push(
+              `[Tool Policy]\nYou MUST NOT use the following tools: ${agentPromptState.disallowedTools.join(", ")}\n[End Tool Policy]`,
+            );
+          }
+          if (parts.length > 0 && effectiveInput) {
+            effectiveInput = `${parts.join("\n\n")}\n\n${effectiveInput}`;
+          } else if (parts.length > 0) {
+            effectiveInput = parts.join("\n\n");
+          }
+        }
+
         return yield* Effect.tryPromise({
           try: () => {
             const managerInput = {
               threadId: input.threadId,
-              ...(input.input !== undefined ? { input: input.input } : {}),
+              ...(effectiveInput !== undefined ? { input: effectiveInput } : {}),
               ...(input.model !== undefined ? { model: input.model } : {}),
               ...(input.modelOptions?.codex?.reasoningEffort !== undefined
                 ? { effort: input.modelOptions.codex.reasoningEffort }
@@ -1475,6 +1511,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
 
     const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>
       Effect.sync(() => {
+        sessionAgentPrompts.delete(threadId);
         manager.stopSession(threadId);
       });
 
