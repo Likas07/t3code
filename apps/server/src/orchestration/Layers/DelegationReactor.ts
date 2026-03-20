@@ -19,6 +19,11 @@ type SessionSetEvent = Extract<
   { type: "thread.session-set" }
 >;
 
+type ActivityAppendedEvent = Extract<
+  OrchestrationEvent,
+  { type: "thread.activity-appended" }
+>;
+
 const serverCommandId = (tag: string): CommandId =>
   CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
 
@@ -101,8 +106,54 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const processDomainEventSafely = (event: SessionSetEvent) =>
-    processSessionSet(event).pipe(
+  const processActivityAppended = Effect.fnUntraced(function* (
+    event: ActivityAppendedEvent,
+  ) {
+    const activity = event.payload.activity;
+    if (activity.kind !== "approval.requested") {
+      return;
+    }
+
+    const readModel = yield* orchestrationEngine.getReadModel();
+    const thread = readModel.threads.find(
+      (entry) => entry.id === event.payload.threadId,
+    );
+    if (!thread?.delegation) {
+      return;
+    }
+
+    const parentThread = readModel.threads.find(
+      (entry) => entry.id === thread.delegation!.parentThreadId,
+    );
+    if (!parentThread) {
+      return;
+    }
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: serverCommandId("delegation-child-approval-needed"),
+      threadId: thread.delegation.parentThreadId,
+      activity: {
+        id: EventId.makeUnsafe(crypto.randomUUID()),
+        tone: "approval",
+        kind: "delegation.child.approval-needed",
+        summary: `Child thread "${thread.title}" needs approval`,
+        payload: {
+          childThreadId: thread.id,
+          parentThreadId: thread.delegation.parentThreadId,
+        },
+        turnId: null,
+        createdAt: event.occurredAt,
+      },
+      createdAt: event.occurredAt,
+    });
+  });
+
+  const processDomainEventSafely = (event: SessionSetEvent | ActivityAppendedEvent) =>
+    (event.type === "thread.activity-appended"
+      ? processActivityAppended(event)
+      : processSessionSet(event)
+    ).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
@@ -121,7 +172,10 @@ const make = Effect.gen(function* () {
 
   const start: DelegationReactorShape["start"] = Effect.forkScoped(
     Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-      if (event.type !== "thread.session-set") {
+      if (
+        event.type !== "thread.session-set" &&
+        event.type !== "thread.activity-appended"
+      ) {
         return Effect.void;
       }
       return worker.enqueue(event);

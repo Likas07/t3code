@@ -39,7 +39,7 @@ export const DelegationTree = memo(function DelegationTree({
   activeThreadId,
 }: DelegationTreeProps) {
   return (
-    <div>
+    <div role={depth === 0 ? "tree" : "group"}>
       {nodes.map((node) => (
         <DelegationTreeRow
           key={node.thread.id}
@@ -69,7 +69,7 @@ const DelegationTreeRow = memo(function DelegationTreeRow({
   const isActive = node.thread.id === activeThreadId;
 
   return (
-    <div>
+    <div role="treeitem" aria-expanded={hasChildren ? expanded : undefined}>
       <button
         type="button"
         className={cn(

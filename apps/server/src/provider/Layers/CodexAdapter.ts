@@ -959,18 +959,41 @@ function mapToRuntimeEvents(
     if (!taskId) {
       return [];
     }
-    return [
+    const collabKind = asString(msg?.collaboration_mode_kind);
+    const events: ProviderRuntimeEvent[] = [
       {
         ...codexEventBase(event, canonicalThreadId),
         type: "task.started",
         payload: {
           taskId: asRuntimeTaskId(taskId),
-          ...(asString(msg?.collaboration_mode_kind)
-            ? { taskType: asString(msg?.collaboration_mode_kind) }
-            : {}),
+          ...(collabKind ? { taskType: collabKind } : {}),
         },
       },
     ];
+
+    // When a collaboration task starts (indicating a subagent spawn), emit a
+    // delegation.agent.spawned runtime event so that ProviderRuntimeIngestion
+    // can translate it into a delegation.batch.start orchestration command.
+    // Skip standard task modes ("plan", "default") which are not delegation.
+    const STANDARD_TASK_MODES = new Set(["plan", "default", "code", "debug"]);
+    if (collabKind && !STANDARD_TASK_MODES.has(collabKind)) {
+      const agentId = collabKind;
+      const subject = asString(msg?.prompt)
+        ? String(msg?.prompt).slice(0, 120)
+        : `Codex ${collabKind} task`;
+      events.push({
+        ...codexEventBase(event, canonicalThreadId),
+        type: "delegation.agent.spawned",
+        payload: {
+          agentId,
+          subject,
+          ...(asString(msg?.prompt) ? { prompt: asString(msg?.prompt)! } : {}),
+          ...(asString(msg?.text) ? { description: asString(msg?.text)! } : {}),
+          toolName: collabKind,
+        },
+      });
+    }
+    return events;
   }
 
   if (event.method === "codex/event/task_complete") {

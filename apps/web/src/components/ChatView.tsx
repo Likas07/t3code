@@ -3773,6 +3773,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                           model={selectedModelForPickerWithCustomFallback}
                           lockedProvider={lockedProvider}
                           modelOptionsByProvider={modelOptionsByProvider}
+                          disabled={!!selectedAgentId}
                           {...(composerProviderState.modelPickerIconClassName
                             ? {
                                 activeProviderIconClassName:
@@ -3789,7 +3790,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         <AgentPicker
                           compact={isComposerFooterCompact}
                           selectedAgentId={selectedAgentId}
-                          onSelectAgent={setSelectedAgentId}
+                          onSelectAgent={(agentId) => {
+                            setSelectedAgentId(agentId);
+                            if (agentId === "prometheus") {
+                              handleInteractionModeChange("plan");
+                            }
+                          }}
                         />
 
                         {isComposerFooterCompact ? (

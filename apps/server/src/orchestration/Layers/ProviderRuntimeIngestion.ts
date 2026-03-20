@@ -25,6 +25,7 @@ import {
   ProviderRuntimeIngestionService,
   type ProviderRuntimeIngestionShape,
 } from "../Services/ProviderRuntimeIngestion.ts";
+import { buildDelegationBatchCommand, type DelegationRequest } from "../delegationTool.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 const providerCommandId = (event: ProviderRuntimeEvent, tag: string): CommandId =>
@@ -1192,16 +1193,43 @@ const make = Effect.gen(function* () {
         }
       }
 
+      // When a provider adapter emits a delegation.agent.spawned event, translate
+      // it into a delegation.batch.start orchestration command so the
+      // DelegationReactor can spin up child threads.
+      if (event.type === "delegation.agent.spawned") {
+        const payload = event.payload;
+        const delegationRequest: DelegationRequest = {
+          parentThreadId: thread.id,
+          agentId: payload.agentId,
+          subject: payload.subject,
+          description: payload.description ?? payload.subject,
+          prompt: payload.prompt ?? payload.subject,
+        };
+        const delegationCommand = buildDelegationBatchCommand(thread.id, [delegationRequest]);
+        yield* orchestrationEngine.dispatch(delegationCommand);
+      }
+
       const activities = runtimeEventToActivities(event);
-      yield* Effect.forEach(activities, (activity) =>
-        orchestrationEngine.dispatch({
+      yield* Effect.forEach(activities, (activity) => {
+        // Enrich approval activities with parentThreadId for child threads
+        const enrichedActivity =
+          activity.kind === "approval.requested" && thread.delegation
+            ? {
+                ...activity,
+                payload: {
+                  ...(activity.payload as Record<string, unknown>),
+                  parentThreadId: thread.delegation.parentThreadId,
+                },
+              }
+            : activity;
+        return orchestrationEngine.dispatch({
           type: "thread.activity.append",
           commandId: providerCommandId(event, "thread-activity-append"),
           threadId: thread.id,
-          activity,
+          activity: enrichedActivity,
           createdAt: activity.createdAt,
-        }),
-      ).pipe(Effect.asVoid);
+        });
+      }).pipe(Effect.asVoid);
     });
 
   const processDomainEvent = (event: TurnStartRequestedDomainEvent) =>

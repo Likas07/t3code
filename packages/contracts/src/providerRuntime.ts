@@ -187,6 +187,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "files.persisted",
   "runtime.warning",
   "runtime.error",
+  "delegation.agent.spawned",
 ]);
 export type ProviderRuntimeEventType = typeof ProviderRuntimeEventType.Type;
 
@@ -237,6 +238,7 @@ const DeprecationNoticeType = Schema.Literal("deprecation.notice");
 const FilesPersistedType = Schema.Literal("files.persisted");
 const RuntimeWarningType = Schema.Literal("runtime.warning");
 const RuntimeErrorType = Schema.Literal("runtime.error");
+const DelegationAgentSpawnedType = Schema.Literal("delegation.agent.spawned");
 
 const ProviderRuntimeEventBase = Schema.Struct({
   eventId: EventId,
@@ -572,6 +574,16 @@ const RuntimeErrorPayload = Schema.Struct({
   detail: Schema.optional(Schema.Unknown),
 });
 export type RuntimeErrorPayload = typeof RuntimeErrorPayload.Type;
+
+const DelegationAgentSpawnedPayload = Schema.Struct({
+  agentId: TrimmedNonEmptyStringSchema,
+  subject: TrimmedNonEmptyStringSchema,
+  description: Schema.optional(TrimmedNonEmptyStringSchema),
+  prompt: Schema.optional(TrimmedNonEmptyStringSchema),
+  toolName: Schema.optional(TrimmedNonEmptyStringSchema),
+  toolInput: Schema.optional(Schema.Unknown),
+});
+export type DelegationAgentSpawnedPayload = typeof DelegationAgentSpawnedPayload.Type;
 
 const ProviderRuntimeSessionStartedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
@@ -919,6 +931,14 @@ const ProviderRuntimeErrorEvent = Schema.Struct({
 });
 export type ProviderRuntimeErrorEvent = typeof ProviderRuntimeErrorEvent.Type;
 
+const ProviderRuntimeDelegationAgentSpawnedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: DelegationAgentSpawnedType,
+  payload: DelegationAgentSpawnedPayload,
+});
+export type ProviderRuntimeDelegationAgentSpawnedEvent =
+  typeof ProviderRuntimeDelegationAgentSpawnedEvent.Type;
+
 export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeSessionStartedEvent,
   ProviderRuntimeSessionConfiguredEvent,
@@ -967,6 +987,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeFilesPersistedEvent,
   ProviderRuntimeWarningEvent,
   ProviderRuntimeErrorEvent,
+  ProviderRuntimeDelegationAgentSpawnedEvent,
 ]);
 export type ProviderRuntimeEventV2 = typeof ProviderRuntimeEventV2.Type;
 

@@ -1581,6 +1581,42 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               payload: message,
             },
           });
+
+          // Emit a delegation.agent.spawned runtime event when the SDK reports
+          // a subagent / Agent tool call so that ProviderRuntimeIngestion can
+          // translate it into a delegation.batch.start orchestration command.
+          if (tool.itemType === "collab_agent_tool_call") {
+            const delegationStamp = yield* makeEventStamp();
+            yield* offerRuntimeEvent({
+              type: "delegation.agent.spawned",
+              eventId: delegationStamp.eventId,
+              provider: PROVIDER,
+              createdAt: delegationStamp.createdAt,
+              threadId: context.session.threadId,
+              ...(context.turnState
+                ? { turnId: asCanonicalTurnId(context.turnState.turnId) }
+                : {}),
+              itemId: asRuntimeItemId(tool.itemId),
+              payload: {
+                agentId: toolName,
+                subject: (toolInput as Record<string, unknown>).prompt
+                  ? String((toolInput as Record<string, unknown>).prompt).slice(0, 120)
+                  : toolName,
+                ...(tool.detail ? { description: tool.detail } : {}),
+                ...(typeof (toolInput as Record<string, unknown>).prompt === "string"
+                  ? { prompt: String((toolInput as Record<string, unknown>).prompt) }
+                  : {}),
+                toolName,
+                toolInput,
+              },
+              providerRefs: nativeProviderRefs(context, { providerItemId: tool.itemId }),
+              raw: {
+                source: "claude.sdk.message",
+                method: "claude/stream_event/content_block_start",
+                payload: message,
+              },
+            });
+          }
           return;
         }
 

@@ -25,6 +25,7 @@ export const AgentPicker = memo(function AgentPicker(props: {
   const primaryAgents = catalog?.agents.filter((agent) => agent.mode === "primary") ?? [];
   const selectedAgent = primaryAgents.find((agent) => agent.id === props.selectedAgentId) ?? null;
 
+  const isPrometheus = props.selectedAgentId === "prometheus";
   const label = selectedAgent ? selectedAgent.name : "No agent";
 
   return (
@@ -64,7 +65,12 @@ export const AgentPicker = memo(function AgentPicker(props: {
               selectedAgent ? "text-foreground/70" : "text-muted-foreground/70",
             )}
           />
-          <span className="min-w-0 flex-1 truncate">{label}</span>
+          <span className="min-w-0 flex-1 truncate">
+            {label}
+            {isPrometheus && (
+              <span className="ml-1 text-[10px] text-muted-foreground/50">Plan</span>
+            )}
+          </span>
           <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
         </span>
       </MenuTrigger>
@@ -86,7 +92,14 @@ export const AgentPicker = memo(function AgentPicker(props: {
             {primaryAgents.map((agent) => (
               <MenuRadioItem key={agent.id} value={agent.id}>
                 <div className="flex flex-col gap-0.5">
-                  <span className="font-medium">{agent.name}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-medium">{agent.name}</span>
+                    {agent.modelFallbackChain.length > 0 && (
+                      <span className="text-[10px] text-muted-foreground/50">
+                        {agent.modelFallbackChain[0]!.model}
+                      </span>
+                    )}
+                  </div>
                   <span className="text-muted-foreground text-xs line-clamp-1">
                     {agent.description}
                   </span>
