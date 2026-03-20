@@ -64,7 +64,11 @@ modelFallbackChain:
   - provider: codex
     model: gpt-5.4
 delegationPolicy:
-  canDelegate: false
+  canDelegate: true
+  allowedSubAgents:
+    - explore
+    - librarian
+  maxDepth: 1
 tags:
   - executor
   - subagent
