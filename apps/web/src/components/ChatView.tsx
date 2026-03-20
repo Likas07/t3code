@@ -152,6 +152,7 @@ import { buildExpandedImagePreview, ExpandedImagePreview } from "./chat/Expanded
 import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./chat/ProviderModelPicker";
 import { AgentPicker } from "./AgentPicker";
 import { DelegationContextBanner } from "./chat/DelegationContextBanner";
+import { useAgentCatalog } from "~/hooks/useAgentCatalog";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./chat/ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./chat/CompactComposerControlsMenu";
@@ -634,7 +635,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
       },
     };
   }, [settings.codexBinaryPath, settings.codexHomePath]);
-  const selectedModelForPicker = selectedModel;
+  // When an agent is selected, resolve its preferred model and provider
+  // to display in the model picker (read-only).
+  const { data: agentCatalog } = useAgentCatalog();
+  const agentResolvedModel = useMemo(() => {
+    if (!selectedAgentId || !agentCatalog) return null;
+    const agent = agentCatalog.agents.find((a) => a.id === selectedAgentId);
+    if (!agent || agent.modelFallbackChain.length === 0) return null;
+    // Pick the first entry whose provider matches a known provider, or just the first entry
+    return agent.modelFallbackChain[0] ?? null;
+  }, [selectedAgentId, agentCatalog]);
+
+  const selectedModelForPicker = agentResolvedModel?.model ?? selectedModel;
   const modelOptionsByProvider = useMemo(
     () => getCustomModelOptionsByProvider(settings),
     [settings],
@@ -3769,7 +3781,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         {/* Provider/model picker */}
                         <ProviderModelPicker
                           compact={isComposerFooterCompact}
-                          provider={selectedProvider}
+                          provider={agentResolvedModel?.provider as ProviderKind ?? selectedProvider}
                           model={selectedModelForPickerWithCustomFallback}
                           lockedProvider={lockedProvider}
                           modelOptionsByProvider={modelOptionsByProvider}
