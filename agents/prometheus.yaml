@@ -82,7 +82,9 @@ delegationPolicy:
   allowedSubAgents:
     - explore
     - librarian
-  maxDepth: 1
+    - metis
+    - momus
+  maxDepth: 2
 toolPolicy:
   restriction: block
   tools:
