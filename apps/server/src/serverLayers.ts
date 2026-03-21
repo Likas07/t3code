@@ -94,11 +94,12 @@ export function makeServerRuntimeServicesLayer() {
     checkpointDiffQueryLayer,
     RuntimeReceiptBusLive,
   );
-  const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
-    Layer.provideMerge(runtimeServicesLayer),
-  );
   const agentCatalogLayer = AgentCatalogServiceLive.pipe(
     Layer.provideMerge(NodeServices.layer),
+  );
+  const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(agentCatalogLayer),
   );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),

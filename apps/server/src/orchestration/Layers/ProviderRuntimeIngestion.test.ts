@@ -39,6 +39,7 @@ import {
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ServerConfig } from "../../config.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { AgentCatalogService } from "../../agent/Services/AgentCatalog.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.makeUnsafe(value);
@@ -165,12 +166,19 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provide(SqlitePersistenceMemory),
     );
+    const mockAgentCatalog = Layer.succeed(AgentCatalogService, {
+      getAgent: () => Effect.succeed(null),
+      listAgents: () => Effect.succeed([]),
+      getCatalog: () => Effect.succeed({ agents: [] } as any),
+      resolveModelForAgent: () => Effect.succeed(null),
+    });
     const layer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(mockAgentCatalog),
     );
     runtime = ManagedRuntime.make(layer);
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
