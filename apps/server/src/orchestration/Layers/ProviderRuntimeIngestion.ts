@@ -1203,7 +1203,7 @@ const make = Effect.gen(function* () {
           agentId: payload.agentId,
           subject: payload.subject,
           description: payload.description ?? payload.subject,
-          prompt: payload.prompt ?? payload.subject,
+          prompt: payload.prompt ?? payload.description ?? payload.subject,
         };
         const delegationCommand = buildDelegationBatchCommand(thread.id, [delegationRequest]);
         yield* orchestrationEngine.dispatch(delegationCommand);

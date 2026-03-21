@@ -593,9 +593,9 @@ const make = Effect.gen(function* () {
               subAgentsMap[subDef.id] = {
                 description: subDef.description,
                 prompt: subDef.systemPrompt,
-                ...(subDef.modelFallbackChain.length > 0
-                  ? { model: subDef.modelFallbackChain[0]!.model }
-                  : {}),
+                // Don't set model — let agents inherit the parent's Claude model.
+                // Our DelegationCoordinator resolves the actual model from the
+                // agent's fallback chain when starting the child thread.
                 ...(subDef.toolPolicy?.restriction === "block"
                   ? { disallowedTools: [...subDef.toolPolicy.tools] }
                   : {}),

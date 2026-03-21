@@ -32,6 +32,7 @@ interface ChildEntry {
   readonly agentId: AgentId;
   readonly subject: string;
   readonly description: string;
+  readonly prompt?: string;
   readonly blockedBy: ReadonlyArray<TaskId>;
   status: "queued" | "running" | "completed" | "failed";
 }
@@ -81,7 +82,7 @@ const make = Effect.gen(function* () {
           message: {
             messageId: MessageId.makeUnsafe(crypto.randomUUID()),
             role: "user",
-            text: child.description,
+            text: child.prompt ?? child.description,
             attachments: [],
           },
           agentId: child.agentId,
@@ -137,7 +138,7 @@ const make = Effect.gen(function* () {
     if (!parentThread) return;
 
     // Build child entries with dependency info from thread tasks
-    const children: Array<ChildEntry> = event.payload.children.map((child) => {
+    const children: Array<ChildEntry> = event.payload.children.map((child): ChildEntry => {
       const task = parentThread.delegationTasks.find(
         (t) => t.id === child.taskId,
       );
@@ -147,6 +148,7 @@ const make = Effect.gen(function* () {
         agentId: child.agentId,
         subject: child.subject,
         description: child.description,
+        ...(child.prompt !== undefined ? { prompt: child.prompt } : {}),
         blockedBy: task?.blockedBy ?? [],
         status: "queued" as const,
       };

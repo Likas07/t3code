@@ -30,6 +30,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           branch,
           worktree_path,
           latest_turn_id,
+          delegation_json,
+          delegation_tasks_json,
           created_at,
           updated_at,
           deleted_at
@@ -45,6 +47,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.branch},
           ${row.worktreePath},
           ${row.latestTurnId},
+          ${row.delegationJson},
+          ${row.delegationTasksJson},
           ${row.createdAt},
           ${row.updatedAt},
           ${row.deletedAt}
@@ -60,6 +64,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           branch = excluded.branch,
           worktree_path = excluded.worktree_path,
           latest_turn_id = excluded.latest_turn_id,
+          delegation_json = excluded.delegation_json,
+          delegation_tasks_json = excluded.delegation_tasks_json,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           deleted_at = excluded.deleted_at
@@ -82,6 +88,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
+          delegation_json AS "delegationJson",
+          delegation_tasks_json AS "delegationTasksJson",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -106,6 +114,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
+          delegation_json AS "delegationJson",
+          delegation_tasks_json AS "delegationTasksJson",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
