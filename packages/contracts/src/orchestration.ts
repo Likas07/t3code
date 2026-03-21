@@ -616,11 +616,15 @@ const ThreadRevertCompleteCommand = Schema.Struct({
 
 // ── Delegation Commands ──────────────────────────────────────────
 
+export const DelegationExecutionMode = Schema.Literals(["native", "managed"]);
+export type DelegationExecutionMode = typeof DelegationExecutionMode.Type;
+
 const DelegationBatchStartCommand = Schema.Struct({
   type: Schema.Literal("delegation.batch.start"),
   commandId: CommandId,
   threadId: ThreadId,
   delegationId: DelegationBatchId,
+  executionMode: Schema.optional(DelegationExecutionMode),
   children: Schema.Array(
     Schema.Struct({
       childThreadId: ThreadId,
@@ -908,6 +912,7 @@ export type OrchestrationEventMetadata = typeof OrchestrationEventMetadata.Type;
 export const DelegationBatchStartedPayload = Schema.Struct({
   threadId: ThreadId,
   delegationId: DelegationBatchId,
+  executionMode: Schema.optional(DelegationExecutionMode),
   children: Schema.Array(
     Schema.Struct({
       childThreadId: ThreadId,

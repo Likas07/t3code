@@ -139,6 +139,11 @@ interface ToolInFlight {
   readonly lastEmittedInputFingerprint?: string;
 }
 
+interface ActiveSubagentTask {
+  readonly agentId: string;
+  readonly itemId: string;
+}
+
 interface ClaudeSessionContext {
   session: ProviderSession;
   readonly promptQueue: Queue.Queue<PromptQueueItem>;
@@ -154,6 +159,8 @@ interface ClaudeSessionContext {
     items: Array<unknown>;
   }>;
   readonly inFlightTools: Map<number, ToolInFlight>;
+  readonly activeSubagentTasks: Map<string, ActiveSubagentTask>;
+  readonly registeredSubagentNames: ReadonlySet<string>;
   turnState: ClaudeTurnState | undefined;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
@@ -1947,23 +1954,38 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               },
             });
             return;
-          case "task_started":
+          case "task_started": {
+            const taskId = message.task_id;
+            const isSubagent =
+              typeof message.task_type === "string" &&
+              context.registeredSubagentNames.has(message.task_type);
+            if (isSubagent && taskId) {
+              context.activeSubagentTasks.set(taskId, {
+                agentId: message.task_type as string,
+                itemId: taskId,
+              });
+            }
             yield* offerRuntimeEvent({
               ...base,
               type: "task.started",
+              ...(isSubagent && taskId ? { subagentTaskId: taskId } : {}),
               payload: {
-                taskId: RuntimeTaskId.makeUnsafe(message.task_id),
+                taskId: RuntimeTaskId.makeUnsafe(taskId),
                 description: message.description,
                 ...(message.task_type ? { taskType: message.task_type } : {}),
               },
             });
             return;
-          case "task_progress":
+          }
+          case "task_progress": {
+            const taskId = message.task_id;
+            const subagentEntry = taskId ? context.activeSubagentTasks.get(taskId) : undefined;
             yield* offerRuntimeEvent({
               ...base,
               type: "task.progress",
+              ...(subagentEntry ? { subagentTaskId: taskId } : {}),
               payload: {
-                taskId: RuntimeTaskId.makeUnsafe(message.task_id),
+                taskId: RuntimeTaskId.makeUnsafe(taskId),
                 description: message.description,
                 ...(message.summary ? { summary: message.summary } : {}),
                 ...(message.usage ? { usage: message.usage } : {}),
@@ -1971,18 +1993,26 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               },
             });
             return;
-          case "task_notification":
+          }
+          case "task_notification": {
+            const taskId = message.task_id;
+            const subagentEntry = taskId ? context.activeSubagentTasks.get(taskId) : undefined;
             yield* offerRuntimeEvent({
               ...base,
               type: "task.completed",
+              ...(subagentEntry ? { subagentTaskId: taskId } : {}),
               payload: {
-                taskId: RuntimeTaskId.makeUnsafe(message.task_id),
+                taskId: RuntimeTaskId.makeUnsafe(taskId),
                 status: message.status,
                 ...(message.summary ? { summary: message.summary } : {}),
                 ...(message.usage ? { usage: message.usage } : {}),
               },
             });
+            if (subagentEntry && taskId) {
+              context.activeSubagentTasks.delete(taskId);
+            }
             return;
+          }
           case "files_persisted":
             yield* offerRuntimeEvent({
               ...base,
@@ -2475,6 +2505,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   : {}),
               };
 
+              // If exactly one sub-agent task is active, attribute the approval to it.
+              const activeSubagentIds = Array.from(context.activeSubagentTasks.keys());
+              const approvalSubagentTaskId =
+                activeSubagentIds.length === 1 ? activeSubagentIds[0] : undefined;
+
               const requestedStamp = yield* makeEventStamp();
               yield* offerRuntimeEvent({
                 type: "request.opened",
@@ -2485,6 +2520,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ...(context.turnState
                   ? { turnId: asCanonicalTurnId(context.turnState.turnId) }
                   : {}),
+                ...(approvalSubagentTaskId ? { subagentTaskId: approvalSubagentTaskId } : {}),
                 requestId: asRuntimeRequestId(requestId),
                 payload: {
                   requestType,
@@ -2535,6 +2571,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ...(context.turnState
                   ? { turnId: asCanonicalTurnId(context.turnState.turnId) }
                   : {}),
+                ...(approvalSubagentTaskId ? { subagentTaskId: approvalSubagentTaskId } : {}),
                 requestId: asRuntimeRequestId(requestId),
                 payload: {
                   requestType,
@@ -2704,6 +2741,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           pendingUserInputs,
           turns: [],
           inFlightTools,
+          activeSubagentTasks: new Map<string, ActiveSubagentTask>(),
+          registeredSubagentNames: new Set(Object.keys(input.agentSubAgents ?? {})),
           turnState: undefined,
           lastAssistantUuid: resumeState?.resumeSessionAt,
           lastThreadStartedId: undefined,

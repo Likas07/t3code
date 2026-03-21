@@ -40,6 +40,7 @@ interface ChildEntry {
 interface BatchState {
   readonly parentThreadId: ThreadId;
   readonly delegationId: DelegationBatchId;
+  readonly executionMode: "native" | "managed";
   readonly children: Array<ChildEntry>;
   readonly maxParallelChildren: number;
 }
@@ -154,9 +155,14 @@ const make = Effect.gen(function* () {
       };
     });
 
+    const executionMode = (event.payload as { executionMode?: string }).executionMode === "native"
+      ? "native" as const
+      : "managed" as const;
+
     const batch: BatchState = {
       parentThreadId: event.payload.threadId,
       delegationId: event.payload.delegationId,
+      executionMode,
       children,
       maxParallelChildren: DEFAULT_DELEGATION_CONFIG.maxParallelChildren,
     };
@@ -167,7 +173,15 @@ const make = Effect.gen(function* () {
       return next;
     });
 
-    yield* startEligibleChildren(batch);
+    if (executionMode === "native") {
+      // Native mode: SDK is already executing the sub-agents. Mark children
+      // as running immediately — do NOT dispatch thread.turn.start.
+      for (const child of children) {
+        child.status = "running";
+      }
+    } else {
+      yield* startEligibleChildren(batch);
+    }
   });
 
   const processChildCompleted = Effect.fnUntraced(function* (

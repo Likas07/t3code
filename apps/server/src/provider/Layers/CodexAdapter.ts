@@ -960,10 +960,19 @@ function mapToRuntimeEvents(
       return [];
     }
     const collabKind = asString(msg?.collaboration_mode_kind);
+
+    // When a collaboration task starts (indicating a subagent spawn), emit a
+    // delegation.agent.spawned runtime event so that ProviderRuntimeIngestion
+    // can translate it into a delegation.batch.start orchestration command.
+    // Skip standard task modes ("plan", "default") which are not delegation.
+    const STANDARD_TASK_MODES = new Set(["plan", "default", "code", "debug"]);
+    const isSubagent = !!(collabKind && !STANDARD_TASK_MODES.has(collabKind));
+
     const events: ProviderRuntimeEvent[] = [
       {
         ...codexEventBase(event, canonicalThreadId),
         type: "task.started",
+        ...(isSubagent ? { subagentTaskId: taskId } : {}),
         payload: {
           taskId: asRuntimeTaskId(taskId),
           ...(collabKind ? { taskType: collabKind } : {}),
@@ -971,25 +980,21 @@ function mapToRuntimeEvents(
       },
     ];
 
-    // When a collaboration task starts (indicating a subagent spawn), emit a
-    // delegation.agent.spawned runtime event so that ProviderRuntimeIngestion
-    // can translate it into a delegation.batch.start orchestration command.
-    // Skip standard task modes ("plan", "default") which are not delegation.
-    const STANDARD_TASK_MODES = new Set(["plan", "default", "code", "debug"]);
-    if (collabKind && !STANDARD_TASK_MODES.has(collabKind)) {
-      const agentId = collabKind;
+    if (isSubagent) {
+      const agentId = collabKind!;
       const subject = asString(msg?.prompt)
         ? String(msg?.prompt).slice(0, 120)
         : `Codex ${collabKind} task`;
       events.push({
         ...codexEventBase(event, canonicalThreadId),
         type: "delegation.agent.spawned",
+        subagentTaskId: taskId,
         payload: {
           agentId,
           subject,
           ...(asString(msg?.prompt) ? { prompt: asString(msg?.prompt)! } : {}),
           ...(asString(msg?.text) ? { description: asString(msg?.text)! } : {}),
-          toolName: collabKind,
+          toolName: collabKind!,
         },
       });
     }
@@ -1014,10 +1019,20 @@ function mapToRuntimeEvents(
         },
       ];
     }
+    // Detect if this completed task was a subagent (non-standard collab mode).
+    // We check the task type from the earlier task_started via the agent_reasoning events.
+    // The collabKind is not directly available here, so check for subagentTaskId presence
+    // from the task_started flow. We tag all task completions with subagentTaskId when
+    // the task has a collaboration_mode_kind set to a non-standard value.
+    const collabKind = asString(msg?.collaboration_mode_kind);
+    const STANDARD_TASK_MODES_COMPLETE = new Set(["plan", "default", "code", "debug"]);
+    const isSubagentComplete = !!(collabKind && !STANDARD_TASK_MODES_COMPLETE.has(collabKind));
+
     const events: ProviderRuntimeEvent[] = [
       {
         ...codexEventBase(event, canonicalThreadId),
         type: "task.completed",
+        ...(isSubagentComplete ? { subagentTaskId: taskId } : {}),
         payload: {
           taskId: asRuntimeTaskId(taskId),
           status: "completed",

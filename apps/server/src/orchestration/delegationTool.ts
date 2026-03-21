@@ -9,7 +9,7 @@
  * @module delegationTool
  */
 import { AgentId, CommandId, DelegationBatchId, TaskId, ThreadId } from "@t3tools/contracts";
-import type { OrchestrationCommand } from "@t3tools/contracts";
+import type { DelegationExecutionMode, OrchestrationCommand } from "@t3tools/contracts";
 
 export interface DelegationRequest {
   parentThreadId: ThreadId;
@@ -19,9 +19,14 @@ export interface DelegationRequest {
   prompt: string;
 }
 
+export interface DelegationBatchOptions {
+  executionMode?: DelegationExecutionMode;
+}
+
 export function buildDelegationBatchCommand(
   parentThreadId: ThreadId,
   requests: DelegationRequest[],
+  options?: DelegationBatchOptions,
 ): Extract<OrchestrationCommand, { type: "delegation.batch.start" }> {
   const now = new Date().toISOString();
   return {
@@ -29,6 +34,7 @@ export function buildDelegationBatchCommand(
     commandId: CommandId.makeUnsafe(`cmd-delegation-${Date.now()}`),
     threadId: parentThreadId,
     delegationId: DelegationBatchId.makeUnsafe(`batch-${Date.now()}`),
+    ...(options?.executionMode ? { executionMode: options.executionMode } : {}),
     children: requests.map((req) => ({
       childThreadId: ThreadId.makeUnsafe(
         `child-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
