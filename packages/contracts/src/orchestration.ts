@@ -431,7 +431,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
   threadId: ThreadId,
   message: Schema.Struct({
     messageId: MessageId,
-    role: Schema.Literal("user"),
+    role: Schema.Literals(["user", "system"]),
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
   }),
@@ -614,6 +614,15 @@ const ThreadRevertCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadTurnCompletedCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.completed"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  turnId: TurnId,
+  result: Schema.Literals(["completed", "failed", "interrupted"]),
+  createdAt: IsoDateTime,
+});
+
 // ── Delegation Commands ──────────────────────────────────────────
 
 export const DelegationExecutionMode = Schema.Literals(["native", "managed"]);
@@ -633,6 +642,7 @@ const DelegationBatchStartCommand = Schema.Struct({
       subject: TrimmedNonEmptyString,
       description: TrimmedNonEmptyString,
       prompt: Schema.optional(TrimmedNonEmptyString),
+      model: Schema.optional(TrimmedNonEmptyString),
     }),
   ),
   createdAt: IsoDateTime,
@@ -689,6 +699,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadMessageAssistantCompleteCommand,
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
+  ThreadTurnCompletedCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   DelegationBatchStartCommand,
@@ -725,6 +736,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.session-set",
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
+  "thread.turn-completed",
   "thread.activity-appended",
   "delegation.batch-started",
   "delegation.child-completed",
@@ -893,6 +905,13 @@ export const ThreadTurnDiffCompletedPayload = Schema.Struct({
   completedAt: IsoDateTime,
 });
 
+export const ThreadTurnCompletedPayload = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+  result: Schema.Literals(["completed", "failed", "interrupted"]),
+  completedAt: IsoDateTime,
+});
+
 export const ThreadActivityAppendedPayload = Schema.Struct({
   threadId: ThreadId,
   activity: OrchestrationThreadActivity,
@@ -921,6 +940,7 @@ export const DelegationBatchStartedPayload = Schema.Struct({
       subject: TrimmedNonEmptyString,
       description: TrimmedNonEmptyString,
       prompt: Schema.optional(TrimmedNonEmptyString),
+      model: Schema.optional(TrimmedNonEmptyString),
     }),
   ),
   createdAt: IsoDateTime,
@@ -1063,6 +1083,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-diff-completed"),
     payload: ThreadTurnDiffCompletedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.turn-completed"),
+    payload: ThreadTurnCompletedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

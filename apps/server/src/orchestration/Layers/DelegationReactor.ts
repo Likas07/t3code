@@ -14,9 +14,9 @@ import {
   type DelegationReactorShape,
 } from "../Services/DelegationReactor.ts";
 
-type SessionSetEvent = Extract<
+type TurnCompletedEvent = Extract<
   OrchestrationEvent,
-  { type: "thread.session-set" }
+  { type: "thread.turn-completed" }
 >;
 
 type ActivityAppendedEvent = Extract<
@@ -30,14 +30,9 @@ const serverCommandId = (tag: string): CommandId =>
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
 
-  const processSessionSet = Effect.fnUntraced(function* (
-    event: SessionSetEvent,
+  const processTurnCompleted = Effect.fnUntraced(function* (
+    event: TurnCompletedEvent,
   ) {
-    const sessionStatus = event.payload.session.status;
-    if (sessionStatus !== "ready" && sessionStatus !== "stopped") {
-      return;
-    }
-
     const readModel = yield* orchestrationEngine.getReadModel();
     const thread = readModel.threads.find(
       (entry) => entry.id === event.payload.threadId,
@@ -72,7 +67,7 @@ const make = Effect.gen(function* () {
       .at(-1);
     const summary = lastAssistantMessage?.text ?? undefined;
 
-    const result = sessionStatus === "ready" ? "completed" : "interrupted";
+    const result = event.payload.result;
 
     yield* orchestrationEngine.dispatch({
       type: "delegation.child.complete",
@@ -149,10 +144,10 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const processDomainEventSafely = (event: SessionSetEvent | ActivityAppendedEvent) =>
+  const processDomainEventSafely = (event: TurnCompletedEvent | ActivityAppendedEvent) =>
     (event.type === "thread.activity-appended"
       ? processActivityAppended(event)
-      : processSessionSet(event)
+      : processTurnCompleted(event)
     ).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
@@ -173,7 +168,7 @@ const make = Effect.gen(function* () {
   const start: DelegationReactorShape["start"] = Effect.forkScoped(
     Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
       if (
-        event.type !== "thread.session-set" &&
+        event.type !== "thread.turn-completed" &&
         event.type !== "thread.activity-appended"
       ) {
         return Effect.void;

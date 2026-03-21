@@ -17,6 +17,7 @@ export interface DelegationRequest {
   subject: string;
   description: string;
   prompt: string;
+  model?: string;
 }
 
 export interface DelegationBatchOptions {
@@ -29,21 +30,21 @@ export function buildDelegationBatchCommand(
   options?: DelegationBatchOptions,
 ): Extract<OrchestrationCommand, { type: "delegation.batch.start" }> {
   const now = new Date().toISOString();
+  const uid = () => crypto.randomUUID().slice(0, 8);
   return {
     type: "delegation.batch.start",
-    commandId: CommandId.makeUnsafe(`cmd-delegation-${Date.now()}`),
+    commandId: CommandId.makeUnsafe(`cmd-delegation-${uid()}`),
     threadId: parentThreadId,
-    delegationId: DelegationBatchId.makeUnsafe(`batch-${Date.now()}`),
+    delegationId: DelegationBatchId.makeUnsafe(`batch-${uid()}`),
     ...(options?.executionMode ? { executionMode: options.executionMode } : {}),
     children: requests.map((req) => ({
-      childThreadId: ThreadId.makeUnsafe(
-        `child-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      ),
-      taskId: TaskId.makeUnsafe(`task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+      childThreadId: ThreadId.makeUnsafe(`child-${uid()}`),
+      taskId: TaskId.makeUnsafe(`task-${uid()}`),
       agentId: AgentId.makeUnsafe(req.agentId),
       subject: req.subject,
       description: req.description,
       prompt: req.prompt,
+      ...(req.model ? { model: req.model } : {}),
     })),
     createdAt: now,
   };

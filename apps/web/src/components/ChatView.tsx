@@ -596,9 +596,46 @@ export default function ChatView({ threadId }: ChatViewProps) {
     ? (sessionProvider ?? selectedProviderByThreadId ?? null)
     : null;
   const selectedProvider: ProviderKind = lockedProvider ?? selectedProviderByThreadId ?? "codex";
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(
-    activeThread?.agentId ?? null,
+  const { data: agentCatalog } = useAgentCatalog();
+  // Preferred default agent per provider. The first match in the catalog
+  // wins, so list the preferred agent ID first.
+  const DEFAULT_AGENT_BY_PROVIDER: Record<string, string> = {
+    claudeAgent: "sisyphus",
+    codex: "hephaestus",
+  };
+  const defaultAgentForProvider = useMemo(() => {
+    if (!agentCatalog) return null;
+    const preferredId = DEFAULT_AGENT_BY_PROVIDER[selectedProvider];
+    if (preferredId) {
+      const preferred = agentCatalog.agents.find(
+        (a) => a.id === preferredId && a.mode === "primary",
+      );
+      if (preferred) return preferred;
+    }
+    // Fallback: first primary agent whose preferred provider matches.
+    const primaryAgents = agentCatalog.agents.filter((a) => a.mode === "primary");
+    return (
+      primaryAgents.find(
+        (a) => a.modelFallbackChain[0]?.provider === selectedProvider,
+      ) ?? null
+    );
+  }, [agentCatalog, selectedProvider]);
+  // Track whether the user has explicitly interacted with the agent picker.
+  // "undefined" = user hasn't touched it (use default), null = user chose "No agent".
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null | undefined>(
+    activeThread?.agentId !== undefined && activeThread?.agentId !== null
+      ? activeThread.agentId
+      : undefined,
   );
+  // Auto-select the default agent for the current provider when the user
+  // hasn't touched the agent picker and the thread hasn't started yet.
+  const resolvedAgentId = useMemo((): string | null => {
+    // User explicitly chose an agent (or "No agent" via null)
+    if (selectedAgentId !== undefined) return selectedAgentId;
+    // Thread already started — don't inject a default
+    if (hasThreadStarted) return null;
+    return defaultAgentForProvider?.id ?? null;
+  }, [selectedAgentId, hasThreadStarted, defaultAgentForProvider]);
   const baseThreadModel = resolveModelSlugForProvider(
     selectedProvider,
     activeThread?.model ?? activeProject?.model ?? getDefaultModel(selectedProvider),
@@ -637,14 +674,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }, [settings.codexBinaryPath, settings.codexHomePath]);
   // When an agent is selected, resolve its preferred model and provider
   // to display in the model picker (read-only).
-  const { data: agentCatalog } = useAgentCatalog();
   const agentResolvedModel = useMemo(() => {
-    if (!selectedAgentId || !agentCatalog) return null;
-    const agent = agentCatalog.agents.find((a) => a.id === selectedAgentId);
+    if (!resolvedAgentId || !agentCatalog) return null;
+    const agent = agentCatalog.agents.find((a) => a.id === resolvedAgentId);
     if (!agent || agent.modelFallbackChain.length === 0) return null;
     // Pick the first entry whose provider matches a known provider, or just the first entry
     return agent.modelFallbackChain[0] ?? null;
-  }, [selectedAgentId, agentCatalog]);
+  }, [resolvedAgentId, agentCatalog]);
 
   const selectedModelForPicker = agentResolvedModel?.model ?? selectedModel;
   const modelOptionsByProvider = useMemo(
@@ -2555,7 +2591,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           projectId: activeProject.id,
           title,
           model: threadCreateModel,
-          ...(selectedAgentId ? { agentId: selectedAgentId as AgentId } : {}),
+          ...(resolvedAgentId ? { agentId: resolvedAgentId as AgentId } : {}),
           runtimeMode,
           interactionMode,
           branch: nextThreadBranch,
@@ -2628,7 +2664,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           ? { modelOptions: selectedModelOptionsForDispatch }
           : {}),
         ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
-        ...(selectedAgentId ? { agentId: selectedAgentId as AgentId } : {}),
+        ...(resolvedAgentId ? { agentId: resolvedAgentId as AgentId } : {}),
         provider: selectedProvider,
         assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
         runtimeMode,
@@ -2915,7 +2951,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
             ? { modelOptions: selectedModelOptionsForDispatch }
             : {}),
           ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
-          ...(selectedAgentId ? { agentId: selectedAgentId as AgentId } : {}),
+          ...(resolvedAgentId ? { agentId: resolvedAgentId as AgentId } : {}),
           assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
           runtimeMode,
           interactionMode: nextInteractionMode,
@@ -3017,7 +3053,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         projectId: activeProject.id,
         title: nextThreadTitle,
         model: nextThreadModel,
-        ...(selectedAgentId ? { agentId: selectedAgentId as AgentId } : {}),
+        ...(resolvedAgentId ? { agentId: resolvedAgentId as AgentId } : {}),
         runtimeMode,
         interactionMode: "default",
         branch: activeThread.branch,
@@ -3041,7 +3077,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
             ? { modelOptions: selectedModelOptionsForDispatch }
             : {}),
           ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
-          ...(selectedAgentId ? { agentId: selectedAgentId as AgentId } : {}),
+          ...(resolvedAgentId ? { agentId: resolvedAgentId as AgentId } : {}),
           assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
           runtimeMode,
           interactionMode: "default",
@@ -3785,7 +3821,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                           model={selectedModelForPickerWithCustomFallback}
                           lockedProvider={lockedProvider}
                           modelOptionsByProvider={modelOptionsByProvider}
-                          disabled={!!selectedAgentId}
+                          disabled={!!resolvedAgentId}
                           {...(composerProviderState.modelPickerIconClassName
                             ? {
                                 activeProviderIconClassName:
@@ -3801,7 +3837,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         />
                         <AgentPicker
                           compact={isComposerFooterCompact}
-                          selectedAgentId={selectedAgentId}
+                          selectedAgentId={resolvedAgentId}
                           onSelectAgent={(agentId) => {
                             setSelectedAgentId(agentId);
                             if (agentId === "prometheus") {

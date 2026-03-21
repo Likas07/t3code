@@ -8,7 +8,9 @@
  */
 import {
   type CanUseTool,
+  createSdkMcpServer,
   query,
+  tool as sdkMcpTool,
   type Options as ClaudeQueryOptions,
   type PermissionMode,
   type PermissionResult,
@@ -17,6 +19,7 @@ import {
   type SDKResultMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod/v4";
 import {
   ApprovalRequestId,
   type CanonicalItemType,
@@ -139,10 +142,6 @@ interface ToolInFlight {
   readonly lastEmittedInputFingerprint?: string;
 }
 
-interface ActiveSubagentTask {
-  readonly agentId: string;
-  readonly itemId: string;
-}
 
 interface ClaudeSessionContext {
   session: ProviderSession;
@@ -159,8 +158,8 @@ interface ClaudeSessionContext {
     items: Array<unknown>;
   }>;
   readonly inFlightTools: Map<number, ToolInFlight>;
-  readonly activeSubagentTasks: Map<string, ActiveSubagentTask>;
-  readonly registeredSubagentNames: ReadonlySet<string>;
+  /** Resolvers for sync delegation tool calls (wait=true). Keyed by delegation ID. */
+  readonly pendingDelegations: Map<string, (result: string) => void>;
   turnState: ClaudeTurnState | undefined;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
@@ -1668,6 +1667,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           // Emit delegation.agent.spawned now that tool.input has full content.
           if (tool.itemType === "collab_agent_tool_call") {
             const fullInput = tool.input as Record<string, unknown>;
+
+            // Resolve agentId from tool input — supports both native Agent tool
+            // format (subagent_type/name) and MCP delegate_to_agent (agent_id).
+            const resolvedAgentId = typeof fullInput.agent_id === "string"
+              ? String(fullInput.agent_id)
+              : typeof fullInput.subagent_type === "string"
+                ? String(fullInput.subagent_type)
+                : typeof fullInput.name === "string"
+                  ? String(fullInput.name)
+                  : tool.toolName;
+
             const delegationStamp = yield* makeEventStamp();
             yield* offerRuntimeEvent({
               type: "delegation.agent.spawned",
@@ -1680,24 +1690,29 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 : {}),
               itemId: asRuntimeItemId(tool.itemId),
               payload: {
-                agentId: typeof fullInput.subagent_type === "string"
-                  ? String(fullInput.subagent_type)
-                  : typeof fullInput.name === "string"
-                    ? String(fullInput.name)
-                    : tool.toolName,
-                subject: typeof fullInput.description === "string"
-                  ? String(fullInput.description).slice(0, 120)
-                  : typeof fullInput.subagent_type === "string"
-                    ? String(fullInput.subagent_type)
-                    : tool.toolName,
-                ...(typeof fullInput.prompt === "string"
-                  ? { prompt: String(fullInput.prompt) }
-                  : {}),
-                ...(typeof fullInput.description === "string"
-                  ? { description: String(fullInput.description) }
-                  : {}),
+                agentId: resolvedAgentId,
+                subject: typeof fullInput.task === "string"
+                  ? String(fullInput.task).slice(0, 120)
+                  : typeof fullInput.description === "string"
+                    ? String(fullInput.description).slice(0, 120)
+                    : typeof fullInput.subagent_type === "string"
+                      ? String(fullInput.subagent_type)
+                      : tool.toolName,
+                ...(typeof fullInput.task === "string"
+                  ? { prompt: String(fullInput.task) }
+                  : typeof fullInput.prompt === "string"
+                    ? { prompt: String(fullInput.prompt) }
+                    : {}),
+                ...(typeof fullInput.task === "string"
+                  ? { description: String(fullInput.task) }
+                  : typeof fullInput.description === "string"
+                    ? { description: String(fullInput.description) }
+                    : {}),
                 toolName: tool.toolName,
                 toolInput: fullInput,
+                // Include the sub-agent's actual response text from the tool result.
+                // The SDK ran the sub-agent natively and returned the result here.
+                ...(toolResult.text.length > 0 ? { result: toolResult.text } : {}),
               },
             });
           }
@@ -1956,19 +1971,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             return;
           case "task_started": {
             const taskId = message.task_id;
-            const isSubagent =
-              typeof message.task_type === "string" &&
-              context.registeredSubagentNames.has(message.task_type);
-            if (isSubagent && taskId) {
-              context.activeSubagentTasks.set(taskId, {
-                agentId: message.task_type as string,
-                itemId: taskId,
-              });
-            }
             yield* offerRuntimeEvent({
               ...base,
               type: "task.started",
-              ...(isSubagent && taskId ? { subagentTaskId: taskId } : {}),
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(taskId),
                 description: message.description,
@@ -1979,11 +1984,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
           case "task_progress": {
             const taskId = message.task_id;
-            const subagentEntry = taskId ? context.activeSubagentTasks.get(taskId) : undefined;
             yield* offerRuntimeEvent({
               ...base,
               type: "task.progress",
-              ...(subagentEntry ? { subagentTaskId: taskId } : {}),
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(taskId),
                 description: message.description,
@@ -1996,11 +1999,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
           case "task_notification": {
             const taskId = message.task_id;
-            const subagentEntry = taskId ? context.activeSubagentTasks.get(taskId) : undefined;
             yield* offerRuntimeEvent({
               ...base,
               type: "task.completed",
-              ...(subagentEntry ? { subagentTaskId: taskId } : {}),
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(taskId),
                 status: message.status,
@@ -2008,9 +2009,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ...(message.usage ? { usage: message.usage } : {}),
               },
             });
-            if (subagentEntry && taskId) {
-              context.activeSubagentTasks.delete(taskId);
-            }
             return;
           }
           case "files_persisted":
@@ -2505,11 +2503,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   : {}),
               };
 
-              // If exactly one sub-agent task is active, attribute the approval to it.
-              const activeSubagentIds = Array.from(context.activeSubagentTasks.keys());
-              const approvalSubagentTaskId =
-                activeSubagentIds.length === 1 ? activeSubagentIds[0] : undefined;
-
               const requestedStamp = yield* makeEventStamp();
               yield* offerRuntimeEvent({
                 type: "request.opened",
@@ -2520,7 +2513,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ...(context.turnState
                   ? { turnId: asCanonicalTurnId(context.turnState.turnId) }
                   : {}),
-                ...(approvalSubagentTaskId ? { subagentTaskId: approvalSubagentTaskId } : {}),
                 requestId: asRuntimeRequestId(requestId),
                 payload: {
                   requestType,
@@ -2571,7 +2563,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ...(context.turnState
                   ? { turnId: asCanonicalTurnId(context.turnState.turnId) }
                   : {}),
-                ...(approvalSubagentTaskId ? { subagentTaskId: approvalSubagentTaskId } : {}),
                 requestId: asRuntimeRequestId(requestId),
                 payload: {
                   requestType,
@@ -2635,6 +2626,84 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ...(fastMode ? { fastMode: true } : {}),
         };
 
+        // Register the delegate_task MCP tool when managed agents are available.
+        // ALL delegation goes through this tool — no SDK-native agents.
+        // Supports sync (wait=true) and async (wait=false) modes.
+        //
+        // The MCP handler must emit delegation.agent.spawned runtime events so
+        // ProviderRuntimeIngestion creates child threads. Since the handler runs
+        // outside the Effect runtime (async MCP context), we use Effect.runFork
+        // to schedule the Queue.offer on the Effect runtime's fiber scheduler.
+        // This is safe because Effect.runFork doesn't block and the queue offer
+        // will execute on the next microtask within the Effect runtime.
+        const sessionPendingDelegations = new Map<string, (result: string) => void>();
+        // Delegation debug logger — writes to a dedicated file so we can trace
+        // every step of the delegation flow independently of server log routing.
+        const _delegLog = (msg: string) => {
+          const line = `[${new Date().toISOString()}] ${msg}\n`;
+          try { require("node:fs").appendFileSync("/tmp/t3-delegation-debug.log", line); } catch {}
+        };
+        const emitDelegationSpawned = (args: { agent_id: string; task: string }) => {
+          _delegLog(`[1-EMIT] agent=${args.agent_id} threadId=${threadId}`);
+          const event = {
+            type: "delegation.agent.spawned" as const,
+            eventId: EventId.makeUnsafe(crypto.randomUUID()),
+            provider: PROVIDER,
+            createdAt: new Date().toISOString(),
+            threadId,
+            payload: {
+              agentId: args.agent_id,
+              subject: args.task.length > 120 ? args.task.slice(0, 117) + "..." : args.task,
+              prompt: args.task,
+              description: args.task,
+              toolName: "delegate_task",
+            },
+            providerRefs: {},
+          } as ProviderRuntimeEvent;
+          Effect.runFork(Queue.offer(runtimeEventQueue, event));
+          _delegLog(`[1-EMIT-DONE] agent=${args.agent_id} runFork scheduled`);
+        };
+        const delegationMcpServer = input.managedAgents?.length
+          ? createSdkMcpServer({
+              name: "t3code-delegation",
+              version: "1.0.0",
+              tools: [
+                sdkMcpTool(
+                  "delegate_task",
+                  `Delegate a task to a specialized agent. The agent will run independently with its own tools and context.\n\nAvailable agents:\n${
+                    input.managedAgents.map((a) => `- ${a.id}: ${a.description}`).join("\n")
+                  }`,
+                  {
+                    agent_id: z.string().describe("Which agent to delegate to"),
+                    task: z.string().describe("Self-contained task description. Include all context the agent needs — file paths, constraints, what 'done' looks like. The agent has no access to your conversation."),
+                  },
+                  async (args) => {
+                    _delegLog(`[0-HANDLER] agent=${args.agent_id}`);
+                    // Emit the delegation event so the orchestration engine
+                    // creates child threads and starts the delegated agent.
+                    emitDelegationSpawned(args);
+
+                    // Block until the child agent completes. The SDK calls all
+                    // parallel MCP handlers concurrently, so multiple delegates
+                    // run in parallel. When the child finishes, the
+                    // DelegationCoordinator resolves the pending Promise via
+                    // ProviderService.resolveDelegation → adapter.resolveDelegation.
+                    const delegationId = `deleg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                    _delegLog(`[0-HANDLER-BLOCKING] agent=${args.agent_id} delegationId=${delegationId}`);
+                    const result = await new Promise<string>((resolve) => {
+                      sessionPendingDelegations.set(delegationId, resolve);
+                    });
+                    sessionPendingDelegations.delete(delegationId);
+                    _delegLog(`[0-HANDLER-RESOLVED] agent=${args.agent_id} delegationId=${delegationId}`);
+                    return {
+                      content: [{ type: "text" as const, text: result }],
+                    };
+                  },
+                ),
+              ],
+            })
+          : undefined;
+
         const queryOptions: ClaudeQueryOptions = {
           ...(input.cwd ? { cwd: input.cwd } : {}),
           ...(input.model ? { model: input.model } : {}),
@@ -2654,44 +2723,22 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           canUseTool,
           env: process.env,
           ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
-          // When an agent is selected, register it natively with the SDK:
-          // - `agent`: sets the main thread's agent (applies prompt, tools, model)
-          // - `agents`: registers sub-agents as dispatchable via the Agent tool
-          // - Fallback to systemPrompt append if no agent name is set
-          ...(input.agentName && input.systemPrompt
+          // Agent system prompt and tool policy are passed via systemPrompt
+          // append mode. The SDK's `agent`/`agents` options are NOT used —
+          // all delegation goes through our orchestration engine.
+          ...(input.systemPrompt
             ? {
-                agent: input.agentName,
-                agents: Object.fromEntries(
-                  [
-                    [input.agentName, {
-                      description: "Main agent for this thread",
-                      prompt: input.systemPrompt,
-                      ...(input.disallowedTools ? { disallowedTools: [...input.disallowedTools] } : {}),
-                    }],
-                    ...Object.entries(input.agentSubAgents ?? {}).map(([id, def]) => [
-                      id,
-                      {
-                        description: def.description,
-                        prompt: def.prompt,
-                        ...(def.model ? { model: def.model } : {}),
-                        ...(def.disallowedTools ? { disallowedTools: [...def.disallowedTools] } : {}),
-                      },
-                    ]),
-                  ],
-                ),
+                systemPrompt: {
+                  type: "preset" as const,
+                  preset: "claude_code" as const,
+                  append: input.systemPrompt,
+                },
+                ...(input.disallowedTools ? { disallowedTools: [...input.disallowedTools] } : {}),
               }
-            : input.systemPrompt
-              ? {
-                  systemPrompt: {
-                    type: "preset" as const,
-                    preset: "claude_code" as const,
-                    append: input.systemPrompt,
-                  },
-                  ...(input.disallowedTools ? { disallowedTools: [...input.disallowedTools] } : {}),
-                }
-              : input.disallowedTools
-                ? { disallowedTools: [...input.disallowedTools] }
-                : {}),
+            : input.disallowedTools
+              ? { disallowedTools: [...input.disallowedTools] }
+              : {}),
+          ...(delegationMcpServer ? { mcpServers: { "t3code-delegation": delegationMcpServer } } : {}),
         };
 
         const queryRuntime = yield* Effect.try({
@@ -2741,8 +2788,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           pendingUserInputs,
           turns: [],
           inFlightTools,
-          activeSubagentTasks: new Map<string, ActiveSubagentTask>(),
-          registeredSubagentNames: new Set(Object.keys(input.agentSubAgents ?? {})),
+          pendingDelegations: sessionPendingDelegations,
           turnState: undefined,
           lastAssistantUuid: resumeState?.resumeSessionAt,
           lastThreadStartedId: undefined,
@@ -3001,6 +3047,35 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       ).pipe(Effect.tap(() => Queue.shutdown(runtimeEventQueue))),
     );
 
+    const _delegLogResolve = (msg: string) => {
+      const line = `[${new Date().toISOString()}] ${msg}\n`;
+      try { require("node:fs").appendFileSync("/tmp/t3-delegation-debug.log", line); } catch {}
+    };
+    const resolveDelegation: ClaudeAdapterShape["resolveDelegation"] = (
+      parentThreadId,
+      result,
+    ) =>
+      Effect.sync(() => {
+        _delegLogResolve(`[6-RESOLVE] parentThreadId=${parentThreadId} resultLen=${result.length} pendingCount=${sessions.get(parentThreadId)?.pendingDelegations.size ?? "no-session"}`);
+        const context = sessions.get(parentThreadId);
+        if (!context) {
+          _delegLogResolve(`[6-RESOLVE-MISS] no session for parentThreadId=${parentThreadId}`);
+          return;
+        }
+        // Resolve the oldest pending sync delegation (FIFO order).
+        const firstKey = context.pendingDelegations.keys().next().value;
+        if (firstKey !== undefined) {
+          const resolve = context.pendingDelegations.get(firstKey);
+          if (resolve) {
+            _delegLogResolve(`[6-RESOLVE-OK] resolved delegationId=${firstKey}`);
+            resolve(result);
+            context.pendingDelegations.delete(firstKey);
+          }
+        } else {
+          _delegLogResolve(`[6-RESOLVE-NONE] no pending delegations to resolve`);
+        }
+      });
+
     return {
       provider: PROVIDER,
       capabilities: {
@@ -3017,6 +3092,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       listSessions,
       hasSession,
       stopAll,
+      resolveDelegation,
       streamEvents: Stream.fromQueue(runtimeEventQueue),
     } satisfies ClaudeAdapterShape;
   });

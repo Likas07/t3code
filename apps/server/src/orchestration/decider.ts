@@ -306,7 +306,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           messageId: command.message.messageId,
-          role: "user",
+          role: command.message.role,
           text: command.message.text,
           attachments: command.message.attachments,
           turnId: null,
@@ -687,7 +687,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             threadId: child.childThreadId,
             projectId: parentThread.projectId,
             title: child.subject,
-            model: parentThread.model,
+            model: child.model ?? parentThread.model,
             agentId: child.agentId,
             runtimeMode: parentThread.runtimeMode,
             interactionMode: parentThread.interactionMode,
@@ -703,7 +703,37 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         }));
 
-      return [batchStartedEvent, ...childThreadEvents];
+      // Emit task.created events on the parent thread so delegationTasks
+      // is populated before DelegationCoordinator processes batch-started.
+      const taskCreatedEvents: ReadonlyArray<Omit<OrchestrationEvent, "sequence">> =
+        command.children.map((child) => ({
+          ...withEventBase({
+            aggregateKind: "task" as const,
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "task.created" as const,
+          payload: {
+            threadId: command.threadId,
+            task: {
+              id: child.taskId,
+              threadId: command.threadId,
+              subject: child.subject,
+              description: child.description,
+              status: "pending" as const,
+              blockedBy: [] as string[],
+              blocks: [] as string[],
+              owner: child.agentId,
+              childThreadId: child.childThreadId,
+              createdAt: command.createdAt,
+              updatedAt: command.createdAt,
+            },
+            createdAt: command.createdAt,
+          },
+        }));
+
+      return [batchStartedEvent, ...taskCreatedEvents, ...childThreadEvents];
     }
 
     case "delegation.child.complete": {
@@ -764,6 +794,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
 
       return [childCompletedEvent, taskUpdatedEvent];
+    }
+
+    case "thread.turn.completed": {
+      const turnThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.turn-completed" as const,
+        payload: {
+          threadId: command.threadId,
+          turnId: command.turnId,
+          result: command.result,
+          completedAt: command.createdAt,
+        },
+      };
     }
 
     case "task.create": {

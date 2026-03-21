@@ -1645,7 +1645,7 @@ export default function Sidebar() {
                                     return (
                                       <SidebarMenuSubItem className="w-full">
                                         <Collapsible defaultOpen={hasActiveChild}>
-                                          <CollapsibleTrigger className="flex h-6 w-full items-center gap-1 pl-5 text-[10px] text-muted-foreground/50 hover:text-muted-foreground/80">
+                                          <CollapsibleTrigger className="flex h-6 w-full items-center gap-1 pl-3 sm:pl-5 text-[10px] text-muted-foreground/50 hover:text-muted-foreground/80">
                                             <ChevronRightIcon className="size-3 shrink-0 transition-transform group-data-[state=open]/collapsible:hidden [[data-state=open]>&]:hidden [[data-state=open]>&]:rotate-90" />
                                             <ChevronDownIcon className="hidden size-3 shrink-0 [[data-state=open]>&]:block" />
                                             <span>{childThreads.length} sub-thread{childThreads.length !== 1 ? "s" : ""}</span>
@@ -1661,13 +1661,19 @@ export default function Sidebar() {
                                                 ).length ?? 0;
                                                 return requested > resolved;
                                               })();
+                                              const childStatus = resolveThreadStatusPill({
+                                                thread: child,
+                                                hasPendingApprovals: childHasPendingApproval,
+                                                hasPendingUserInput:
+                                                  derivePendingUserInputs(child.activities ?? []).length > 0,
+                                              });
                                               return (
                                                 <SidebarMenuSubButton
                                                   key={child.id}
                                                   render={<div role="button" tabIndex={0} />}
                                                   size="sm"
                                                   isActive={child.id === routeThreadId}
-                                                  className="h-7 w-full pl-8 text-left text-xs text-muted-foreground/60 hover:bg-accent hover:text-foreground/80"
+                                                  className="h-7 w-full min-w-0 pl-6 sm:pl-8 text-left text-xs text-muted-foreground/60 hover:bg-accent hover:text-foreground/80"
                                                   onClick={(event) => {
                                                     handleThreadClick(
                                                       event,
@@ -1679,13 +1685,20 @@ export default function Sidebar() {
                                                   <span className="min-w-0 flex-1 truncate text-[11px]">
                                                     {child.title}
                                                   </span>
-                                                  {childHasPendingApproval && (
-                                                    <span title="Approval needed" className="inline-flex shrink-0">
-                                                      <AlertCircle className="size-3 text-orange-500" />
+                                                  {childStatus && (
+                                                    <span
+                                                      className={`inline-flex shrink-0 items-center gap-1 text-[9px] ${childStatus.colorClass}`}
+                                                    >
+                                                      <span
+                                                        className={`h-1.5 w-1.5 rounded-full ${childStatus.dotClass} ${
+                                                          childStatus.pulse ? "animate-pulse" : ""
+                                                        }`}
+                                                      />
+                                                      <span className="hidden md:inline">{childStatus.label}</span>
                                                     </span>
                                                   )}
                                                   {child.agentId && (
-                                                    <span className="ml-1 inline-flex shrink-0 items-center rounded bg-primary/8 px-1 py-0.5 text-[8px] font-medium leading-none text-primary/60">
+                                                    <span className="ml-1 hidden shrink-0 items-center rounded bg-primary/8 px-1 py-0.5 text-[8px] font-medium leading-none text-primary/60 sm:inline-flex">
                                                       {child.agentId.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
                                                     </span>
                                                   )}

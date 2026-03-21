@@ -29,6 +29,7 @@ import {
   type ProviderCommandReactorShape,
 } from "../Services/ProviderCommandReactor.ts";
 import { inferProviderForModel } from "@t3tools/shared/model";
+import { DEFAULT_DELEGATION_INSTRUCTIONS } from "../delegationInstructions.ts";
 
 type ProviderIntentEvent = Extract<
   OrchestrationEvent,
@@ -224,8 +225,7 @@ const make = Effect.gen(function* () {
       readonly providerOptions?: ProviderStartOptions;
       readonly systemPrompt?: string;
       readonly disallowedTools?: string[];
-      readonly agentName?: string;
-      readonly agentSubAgents?: Record<string, { description: string; prompt: string; model?: string; disallowedTools?: string[] }>;
+      readonly managedAgents?: Array<{ id: string; description: string }>;
     },
   ) {
     const readModel = yield* orchestrationEngine.getReadModel();
@@ -242,11 +242,15 @@ const make = Effect.gen(function* () {
       : undefined;
     const threadProvider: ProviderKind = currentProvider ?? inferProviderForModel(thread.model);
     if (options?.provider !== undefined && options.provider !== threadProvider) {
-      return yield* new ProviderAdapterRequestError({
-        provider: threadProvider,
-        method: "thread.turn.start",
-        detail: `Thread '${threadId}' is bound to provider '${threadProvider}' and cannot switch to '${options.provider}'.`,
-      });
+      // Allow provider switching for delegation child threads — the agent's
+      // preferred provider was explicitly resolved by the orchestration layer.
+      if (!thread.delegation) {
+        return yield* new ProviderAdapterRequestError({
+          provider: threadProvider,
+          method: "thread.turn.start",
+          detail: `Thread '${threadId}' is bound to provider '${threadProvider}' and cannot switch to '${options.provider}'.`,
+        });
+      }
     }
     if (
       options?.model !== undefined &&
@@ -289,8 +293,7 @@ const make = Effect.gen(function* () {
         runtimeMode: desiredRuntimeMode,
         ...(options?.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
         ...(options?.disallowedTools ? { disallowedTools: options.disallowedTools } : {}),
-        ...(options?.agentName ? { agentName: options.agentName } : {}),
-        ...(options?.agentSubAgents ? { agentSubAgents: options.agentSubAgents } : {}),
+        ...(options?.managedAgents ? { managedAgents: options.managedAgents } : {}),
       });
 
     const bindSessionToThread = (session: ProviderSession) =>
@@ -389,8 +392,7 @@ const make = Effect.gen(function* () {
     readonly createdAt: string;
     readonly systemPrompt?: string;
     readonly disallowedTools?: string[];
-    readonly agentName?: string;
-    readonly agentSubAgents?: Record<string, { description: string; prompt: string; model?: string; disallowedTools?: string[] }>;
+    readonly managedAgents?: Array<{ id: string; description: string }>;
   }) {
     const thread = yield* resolveThread(input.threadId);
     if (!thread) {
@@ -403,8 +405,7 @@ const make = Effect.gen(function* () {
       ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
       ...(input.systemPrompt !== undefined ? { systemPrompt: input.systemPrompt } : {}),
       ...(input.disallowedTools !== undefined ? { disallowedTools: input.disallowedTools } : {}),
-      ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
-      ...(input.agentSubAgents !== undefined ? { agentSubAgents: input.agentSubAgents } : {}),
+      ...(input.managedAgents !== undefined ? { managedAgents: input.managedAgents } : {}),
     });
     if (input.providerOptions !== undefined) {
       threadProviderOptions.set(input.threadId, input.providerOptions);
@@ -518,7 +519,7 @@ const make = Effect.gen(function* () {
     }
 
     const message = thread.messages.find((entry) => entry.id === event.payload.messageId);
-    if (!message || message.role !== "user") {
+    if (!message || (message.role !== "user" && message.role !== "system")) {
       yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
         kind: "provider.turn.start.failed",
@@ -546,14 +547,21 @@ const make = Effect.gen(function* () {
     let resolvedModelOptions = event.payload.modelOptions;
 
     if (event.payload.agentId && resolvedProvider === undefined && resolvedModel === undefined) {
-      // Determine which providers are currently available by checking active
-      // sessions. Fall back to both known providers if no sessions exist yet.
-      const activeSessions = yield* providerService.listSessions();
-      const activeProviders = [...new Set(activeSessions.map((s) => s.provider))];
-      const providersToCheck: readonly ProviderKind[] =
-        activeProviders.length > 0
+      // Determine which providers to check. For delegation child threads,
+      // always check all providers since the child starts its own session
+      // and should use the agent's preferred provider. For regular threads,
+      // limit to active providers so we don't start unnecessary sessions.
+      const isDelegationChild = thread?.delegation !== undefined;
+      let providersToCheck: readonly ProviderKind[];
+      if (isDelegationChild) {
+        providersToCheck = ["codex", "claudeAgent"] as const;
+      } else {
+        const activeSessions = yield* providerService.listSessions();
+        const activeProviders = [...new Set(activeSessions.map((s) => s.provider))];
+        providersToCheck = activeProviders.length > 0
           ? activeProviders
           : (["codex", "claudeAgent"] as const);
+      }
       const agentModel = yield* agentCatalog.resolveModelForAgent(
         event.payload.agentId,
         providersToCheck,
@@ -567,44 +575,44 @@ const make = Effect.gen(function* () {
       }
     }
 
-    // Resolve agent config: system prompt, tool policy, and sub-agents
-    // that this agent can delegate to (registered natively with the SDK).
+    // Resolve agent config: system prompt, tool policy, and sub-agents.
+    // ALL sub-agents are managed by our orchestration engine (no SDK-native
+    // delegation). The delegate_task tool is registered via MCP/dynamic tools.
     let agentSystemPrompt: string | undefined;
     let agentDisallowedTools: string[] | undefined;
-    let agentName: string | undefined;
-    let agentSubAgents: Record<string, { description: string; prompt: string; model?: string; disallowedTools?: string[] }> | undefined;
+    let managedSubAgents: Array<{ id: string; description: string }> = [];
 
     if (event.payload.agentId) {
       const agentDef = yield* agentCatalog.getAgent(event.payload.agentId);
       if (agentDef) {
         agentSystemPrompt = agentDef.systemPrompt;
-        agentName = agentDef.id;
         if (agentDef.toolPolicy?.restriction === "block") {
           agentDisallowedTools = [...agentDef.toolPolicy.tools];
         }
 
-        // Build sub-agents map from the delegation policy so the provider
-        // SDK natively registers them as dispatchable agents.
+        // Build the managed agents list from the delegation policy.
+        // All sub-agents go through our engine — no SDK-native delegation.
         if (agentDef.delegationPolicy.canDelegate && agentDef.delegationPolicy.allowedSubAgents) {
-          const subAgentsMap: typeof agentSubAgents = {};
           for (const subAgentId of agentDef.delegationPolicy.allowedSubAgents) {
             const subDef = yield* agentCatalog.getAgent(subAgentId);
-            if (subDef) {
-              subAgentsMap[subDef.id] = {
-                description: subDef.description,
-                prompt: subDef.systemPrompt,
-                // Don't set model — let agents inherit the parent's Claude model.
-                // Our DelegationCoordinator resolves the actual model from the
-                // agent's fallback chain when starting the child thread.
-                ...(subDef.toolPolicy?.restriction === "block"
-                  ? { disallowedTools: [...subDef.toolPolicy.tools] }
-                  : {}),
-              };
-            }
+            if (!subDef) continue;
+            managedSubAgents.push({
+              id: subDef.id,
+              description: subDef.description,
+            });
           }
-          if (Object.keys(subAgentsMap).length > 0) {
-            agentSubAgents = subAgentsMap;
-          }
+        }
+
+        // Append delegation instructions + agent roster to system prompt.
+        if (agentDef.delegationPolicy.canDelegate && managedSubAgents.length > 0 && agentSystemPrompt) {
+          const delegationBlock = agentDef.delegationInstructions
+            ?? DEFAULT_DELEGATION_INSTRUCTIONS;
+          const agentRoster = [
+            "",
+            "### Your available agents",
+            ...managedSubAgents.map((a) => `- **${a.id}**: ${a.description}`),
+          ].join("\n");
+          agentSystemPrompt = agentSystemPrompt + "\n" + delegationBlock + "\n" + agentRoster;
         }
       }
     }
@@ -625,8 +633,7 @@ const make = Effect.gen(function* () {
       createdAt: event.payload.createdAt,
       ...(agentSystemPrompt !== undefined ? { systemPrompt: agentSystemPrompt } : {}),
       ...(agentDisallowedTools !== undefined ? { disallowedTools: agentDisallowedTools } : {}),
-      ...(agentName !== undefined ? { agentName } : {}),
-      ...(agentSubAgents !== undefined ? { agentSubAgents } : {}),
+      ...(managedSubAgents.length > 0 ? { managedAgents: managedSubAgents } : {}),
     }).pipe(
       Effect.catchCause((cause) =>
         appendProviderFailureActivity({

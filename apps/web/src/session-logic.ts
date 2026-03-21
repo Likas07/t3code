@@ -531,8 +531,28 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
 function collapseDerivedWorkLogEntries(
   entries: ReadonlyArray<DerivedWorkLogEntry>,
 ): DerivedWorkLogEntry[] {
-  const collapsed: DerivedWorkLogEntry[] = [];
+  // Two-pass collapse: first merge non-adjacent entries with the same collapse
+  // key (e.g., MCP tool updates that arrive interleaved with other tools),
+  // then sequential merge for adjacent entries.
+  const byKey = new Map<string, number>();
+  const deduped: DerivedWorkLogEntry[] = [];
   for (const entry of entries) {
+    if (entry.collapseKey !== undefined && byKey.has(entry.collapseKey)) {
+      const existingIndex = byKey.get(entry.collapseKey)!;
+      const existing = deduped[existingIndex]!;
+      if (shouldCollapseToolLifecycleEntries(existing, entry)) {
+        deduped[existingIndex] = mergeDerivedWorkLogEntries(existing, entry);
+        continue;
+      }
+    }
+    if (entry.collapseKey !== undefined) {
+      byKey.set(entry.collapseKey, deduped.length);
+    }
+    deduped.push(entry);
+  }
+  // Second pass: sequential collapse for remaining adjacent pairs.
+  const collapsed: DerivedWorkLogEntry[] = [];
+  for (const entry of deduped) {
     const previous = collapsed.at(-1);
     if (previous && shouldCollapseToolLifecycleEntries(previous, entry)) {
       collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);

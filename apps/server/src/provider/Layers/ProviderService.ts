@@ -584,6 +584,30 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       stopSession,
       listSessions,
       getCapabilities,
+      resolveDelegation: (input) =>
+        Effect.gen(function* () {
+          const _dl = (msg: string) => { try { require("node:fs").appendFileSync("/tmp/t3-delegation-debug.log", `[${new Date().toISOString()}] ${msg}\n`); } catch {} };
+          _dl(`[4-SVC-RESOLVE] parentThreadId=${input.parentThreadId} childThreadId=${input.childThreadId} result=${input.result}`);
+          // Build the structured result text
+          const resultText = [
+            "## Delegation Result",
+            `- **Agent:** ${input.childThreadId}`,
+            `- **Status:** ${input.result}`,
+            ...(input.summary ? [`- **Summary:** ${input.summary}`] : []),
+          ].join("\n");
+
+          // Find which adapter owns the parent thread and resolve on it
+          const binding = yield* directory.getBinding(input.parentThreadId);
+          if (Option.isNone(binding)) {
+            _dl(`[4-SVC-RESOLVE-MISS] no binding for parentThreadId=${input.parentThreadId}`);
+            return;
+          }
+
+          _dl(`[4-SVC-RESOLVE] found binding provider=${binding.value.provider}, calling adapter.resolveDelegation`);
+          const adapter = yield* registry.getByProvider(binding.value.provider);
+          yield* adapter.resolveDelegation(input.parentThreadId, resultText);
+          _dl(`[4-SVC-RESOLVE-DONE] adapter.resolveDelegation returned`);
+        }),
       rollbackConversation,
       // Each access creates a fresh PubSub subscription so that multiple
       // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each

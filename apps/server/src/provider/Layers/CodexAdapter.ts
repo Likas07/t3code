@@ -1269,6 +1269,29 @@ function mapToRuntimeEvents(
     ];
   }
 
+  // Synthetic delegation event emitted by handleServerRequest when the
+  // delegate_task dynamic tool is called.
+  if (event.method === "delegation.agent.spawned") {
+    const agentId = asString(payload?.agentId);
+    const subject = asString(payload?.subject) ?? "Delegated task";
+    if (!agentId) {
+      return [];
+    }
+    return [
+      {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "delegation.agent.spawned" as const,
+        payload: {
+          agentId,
+          subject,
+          ...(asString(payload?.prompt) ? { prompt: asString(payload?.prompt)! } : {}),
+          ...(asString(payload?.description) ? { description: asString(payload?.description)! } : {}),
+          ...(asString(payload?.toolName) ? { toolName: asString(payload?.toolName)! } : {}),
+        },
+      },
+    ];
+  }
+
   if (event.method === "windowsSandbox/setupCompleted") {
     const payloadRecord = asObject(event.payload);
     const success = payloadRecord?.success;
@@ -1359,6 +1382,30 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         });
       }
 
+      // Build the delegate_task dynamic tool definition from managed agents.
+      const dynamicTools = input.managedAgents?.length ? [{
+        name: "delegate_task",
+        description: `Delegate a task to a specialized agent. The agent will run independently with its own tools and context.\n\nAvailable agents:\n${
+          input.managedAgents.map((a: { id: string; description: string }) => `- ${a.id}: ${a.description}`).join("\n")
+        }`,
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            agent_id: {
+              type: "string" as const,
+              enum: input.managedAgents.map((a: { id: string }) => a.id),
+              description: "Which agent to delegate to",
+            },
+            task: {
+              type: "string" as const,
+              description: "Self-contained task description. Include all context the agent needs.",
+            },
+          },
+          required: ["agent_id", "task"],
+          additionalProperties: false,
+        },
+      }] : undefined;
+
       const managerInput: CodexAppServerStartSessionInput = {
         threadId: input.threadId,
         provider: "codex",
@@ -1368,6 +1415,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         runtimeMode: input.runtimeMode,
         ...(input.model !== undefined ? { model: input.model } : {}),
         ...(input.modelOptions?.codex?.fastMode ? { serviceTier: "fast" } : {}),
+        ...(dynamicTools ? { dynamic_tools: dynamicTools } : {}),
       };
 
       return Effect.tryPromise({
@@ -1581,6 +1629,24 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         }),
     );
 
+    const resolveDelegation: CodexAdapterShape["resolveDelegation"] = (
+      parentThreadId,
+      result,
+    ) =>
+      Effect.sync(() => {
+        // Resolve the oldest pending sync delegation on the Codex session.
+        const context = manager.getSession(parentThreadId);
+        if (!context) return;
+        const firstKey = context.pendingDynamicToolCalls.keys().next().value;
+        if (firstKey !== undefined) {
+          const pending = context.pendingDynamicToolCalls.get(firstKey);
+          if (pending?.wait) {
+            manager.writeToolCallResult(parentThreadId, pending.jsonRpcId, result);
+            context.pendingDynamicToolCalls.delete(firstKey);
+          }
+        }
+      });
+
     return {
       provider: PROVIDER,
       capabilities: {
@@ -1597,6 +1663,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       listSessions,
       hasSession,
       stopAll,
+      resolveDelegation,
       streamEvents: Stream.fromQueue(runtimeEventQueue),
     } satisfies CodexAdapterShape;
   });

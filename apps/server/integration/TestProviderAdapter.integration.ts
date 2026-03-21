@@ -488,6 +488,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
       readThread,
       rollbackThread,
       stopAll,
+      resolveDelegation: () => Effect.void,
       streamEvents: Stream.fromQueue(runtimeEvents),
     };
 

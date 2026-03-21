@@ -116,6 +116,7 @@ export function makeServerRuntimeServicesLayer() {
   );
   const delegationCoordinatorLayer = DelegationCoordinatorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(agentCatalogLayer),
   );
   const delegationReactorLayer = DelegationReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
