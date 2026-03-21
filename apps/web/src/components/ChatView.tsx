@@ -595,7 +595,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const lockedProvider: ProviderKind | null = hasThreadStarted
     ? (sessionProvider ?? selectedProviderByThreadId ?? null)
     : null;
-  const selectedProvider: ProviderKind = lockedProvider ?? selectedProviderByThreadId ?? "codex";
+  const baseSelectedProvider: ProviderKind = lockedProvider ?? selectedProviderByThreadId ?? "codex";
   const { data: agentCatalog } = useAgentCatalog();
   // Preferred default agent per provider. The first match in the catalog
   // wins, so list the preferred agent ID first.
@@ -605,7 +605,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   };
   const defaultAgentForProvider = useMemo(() => {
     if (!agentCatalog) return null;
-    const preferredId = DEFAULT_AGENT_BY_PROVIDER[selectedProvider];
+    const preferredId = DEFAULT_AGENT_BY_PROVIDER[baseSelectedProvider];
     if (preferredId) {
       const preferred = agentCatalog.agents.find(
         (a) => a.id === preferredId && a.mode === "primary",
@@ -616,10 +616,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
     const primaryAgents = agentCatalog.agents.filter((a) => a.mode === "primary");
     return (
       primaryAgents.find(
-        (a) => a.modelFallbackChain[0]?.provider === selectedProvider,
+        (a) => a.modelFallbackChain[0]?.provider === baseSelectedProvider,
       ) ?? null
     );
-  }, [agentCatalog, selectedProvider]);
+  }, [agentCatalog, baseSelectedProvider]);
   // Track whether the user has explicitly interacted with the agent picker.
   // "undefined" = user hasn't touched it (use default), null = user chose "No agent".
   const [selectedAgentId, setSelectedAgentId] = useState<string | null | undefined>(
@@ -636,6 +636,17 @@ export default function ChatView({ threadId }: ChatViewProps) {
     if (hasThreadStarted) return null;
     return defaultAgentForProvider?.id ?? null;
   }, [selectedAgentId, hasThreadStarted, defaultAgentForProvider]);
+  // When an agent is selected, resolve its preferred model and provider.
+  // This must come before selectedProvider/selectedModel since they depend on it.
+  const agentResolvedModel = useMemo(() => {
+    if (!resolvedAgentId || !agentCatalog) return null;
+    const agent = agentCatalog.agents.find((a) => a.id === resolvedAgentId);
+    if (!agent || agent.modelFallbackChain.length === 0) return null;
+    return agent.modelFallbackChain[0] ?? null;
+  }, [resolvedAgentId, agentCatalog]);
+  // When an agent is selected, its preferred provider overrides the
+  // base provider so all downstream code uses the right provider.
+  const selectedProvider: ProviderKind = (agentResolvedModel?.provider as ProviderKind) ?? baseSelectedProvider;
   const baseThreadModel = resolveModelSlugForProvider(
     selectedProvider,
     activeThread?.model ?? activeProject?.model ?? getDefaultModel(selectedProvider),
@@ -672,16 +683,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
       },
     };
   }, [settings.codexBinaryPath, settings.codexHomePath]);
-  // When an agent is selected, resolve its preferred model and provider
-  // to display in the model picker (read-only).
-  const agentResolvedModel = useMemo(() => {
-    if (!resolvedAgentId || !agentCatalog) return null;
-    const agent = agentCatalog.agents.find((a) => a.id === resolvedAgentId);
-    if (!agent || agent.modelFallbackChain.length === 0) return null;
-    // Pick the first entry whose provider matches a known provider, or just the first entry
-    return agent.modelFallbackChain[0] ?? null;
-  }, [resolvedAgentId, agentCatalog]);
-
   const selectedModelForPicker = agentResolvedModel?.model ?? selectedModel;
   const modelOptionsByProvider = useMemo(
     () => getCustomModelOptionsByProvider(settings),
