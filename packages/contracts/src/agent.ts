@@ -34,6 +34,7 @@ export const DelegationPolicy = Schema.Struct({
   canDelegate: Schema.Boolean,
   allowedSubAgents: Schema.optional(Schema.Array(AgentId)),
   maxDepth: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  defaultTimeoutMinutes: Schema.optional(Schema.Number),
 });
 export type DelegationPolicy = typeof DelegationPolicy.Type;
 
@@ -48,6 +49,7 @@ export const AgentDefinition = Schema.Struct({
   modelFallbackChain: Schema.Array(ModelFallbackEntry),
   toolPolicy: Schema.optional(AgentToolPolicy),
   delegationPolicy: DelegationPolicy,
+  delegationInstructions: Schema.optional(TrimmedNonEmptyString),
   tags: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 export type AgentDefinition = typeof AgentDefinition.Type;

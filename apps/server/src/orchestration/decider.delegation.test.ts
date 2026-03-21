@@ -142,8 +142,8 @@ describe("decider delegation", () => {
 
     expect(Array.isArray(result)).toBe(true);
     const events = Array.isArray(result) ? result : [result];
-    // 1 batch-started + 2 thread.created
-    expect(events).toHaveLength(3);
+    // 1 batch-started + 2 task.created + 2 thread.created
+    expect(events).toHaveLength(5);
 
     expect(events[0]?.type).toBe("delegation.batch-started");
     expect(events[0]?.payload).toMatchObject({
@@ -151,8 +151,13 @@ describe("decider delegation", () => {
       delegationId: asDelegationBatchId("batch-1"),
     });
 
-    expect(events[1]?.type).toBe("thread.created");
-    const child1Payload = events[1]?.payload as {
+    // task.created events come before thread.created so delegationTasks
+    // are projected onto the parent thread before DelegationCoordinator runs.
+    expect(events[1]?.type).toBe("task.created");
+    expect(events[2]?.type).toBe("task.created");
+
+    expect(events[3]?.type).toBe("thread.created");
+    const child1Payload = events[3]?.payload as {
       threadId: string;
       delegation: { parentThreadId: string; rootThreadId: string; depth: number };
     };
@@ -163,8 +168,8 @@ describe("decider delegation", () => {
       depth: 1,
     });
 
-    expect(events[2]?.type).toBe("thread.created");
-    const child2Payload = events[2]?.payload as {
+    expect(events[4]?.type).toBe("thread.created");
+    const child2Payload = events[4]?.payload as {
       threadId: string;
       delegation: { parentThreadId: string; rootThreadId: string; depth: number };
     };

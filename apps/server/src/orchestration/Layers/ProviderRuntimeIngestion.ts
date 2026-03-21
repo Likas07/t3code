@@ -2,7 +2,6 @@ import {
   ApprovalRequestId,
   type AssistantDeliveryMode,
   CommandId,
-  type DelegationExecutionMode,
   MessageId,
   type OrchestrationEvent,
   type OrchestrationProposedPlanId,
@@ -490,8 +489,8 @@ const make = Effect.gen(function* () {
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const agentCatalog = yield* AgentCatalogService;
 
-  // Maps subagentTaskId → childThreadId for native delegation routing.
-  const subagentTaskToChildThread = new Map<string, ThreadId>();
+  // Maps childThreadId → taskId for delegation task completion.
+  const childThreadToTaskId = new Map<string, string>();
 
   const assistantDeliveryModeRef = yield* Ref.make<AssistantDeliveryMode>(
     DEFAULT_ASSISTANT_DELIVERY_MODE,
@@ -865,149 +864,6 @@ const make = Effect.gen(function* () {
 
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
-      // Route events with subagentTaskId to the corresponding child thread.
-      // This allows native sub-agent events (task.started/progress/completed,
-      // approvals) to appear in the child thread's UI.
-      if (event.subagentTaskId) {
-        const childThreadId = subagentTaskToChildThread.get(event.subagentTaskId);
-        if (childThreadId) {
-          // Handle native sub-agent completion: dispatch delegation.child.complete
-          // and synthetic session status updates.
-          if (event.type === "task.started") {
-            // Surface the task description as a message on the child thread
-            // so it's visible when the user clicks into the child.
-            const taskDesc = (event as { payload?: Record<string, unknown> }).payload?.description;
-            if (typeof taskDesc === "string" && taskDesc.length > 0) {
-              const taskMsgId = MessageId.makeUnsafe(`native-task-${childThreadId}`);
-              yield* orchestrationEngine.dispatch({
-                type: "thread.message.assistant.delta",
-                commandId: providerCommandId(event, "native-subagent-task-desc-delta"),
-                threadId: childThreadId,
-                messageId: taskMsgId,
-                delta: `**Task:** ${taskDesc}`,
-                createdAt: event.createdAt,
-              });
-              yield* orchestrationEngine.dispatch({
-                type: "thread.message.assistant.complete",
-                commandId: providerCommandId(event, "native-subagent-task-desc-complete"),
-                threadId: childThreadId,
-                messageId: taskMsgId,
-                createdAt: event.createdAt,
-              });
-            }
-
-            yield* orchestrationEngine.dispatch({
-              type: "thread.session.set",
-              commandId: providerCommandId(event, "native-subagent-session-running"),
-              threadId: childThreadId,
-              session: {
-                threadId: childThreadId,
-                status: "running",
-                providerName: event.provider,
-                runtimeMode: "full-access",
-                activeTurnId: null,
-                lastError: null,
-                updatedAt: event.createdAt,
-              },
-              createdAt: event.createdAt,
-            });
-          }
-
-          // Surface task progress descriptions as messages on the child thread
-          if (event.type === "task.progress") {
-            const progressPayload = (event as { payload?: Record<string, unknown> }).payload;
-            const progressDesc = progressPayload?.description as string | undefined;
-            const lastTool = progressPayload?.lastToolName as string | undefined;
-            if (typeof progressDesc === "string" && progressDesc.length > 0) {
-              yield* orchestrationEngine.dispatch({
-                type: "thread.message.assistant.delta",
-                commandId: providerCommandId(event, "native-subagent-progress"),
-                threadId: childThreadId,
-                messageId: MessageId.makeUnsafe(`native-progress-${childThreadId}`),
-                delta: progressDesc + (lastTool ? ` (using ${lastTool})` : ""),
-                createdAt: event.createdAt,
-              });
-            }
-          }
-
-          if (event.type === "task.completed") {
-            const taskPayload = (event as { payload?: Record<string, unknown> }).payload;
-            const status = taskPayload?.status as string | undefined;
-            const summary = taskPayload?.summary as string | undefined;
-            const result = status === "failed" ? "failed" : "completed";
-
-            // Find the taskId from the delegation batch for the child thread
-            const completionReadModel = yield* orchestrationEngine.getReadModel();
-            const childThread = completionReadModel.threads.find((t) => t.id === childThreadId);
-            const delegationTaskId = childThread?.delegationTasks?.[0]?.id;
-
-            // Surface the sub-agent's result as a visible message on the child
-            // thread. The SDK ran the sub-agent natively in the parent session,
-            // so the child thread only has task description + progress so far.
-            // Add the final summary as a completed assistant message.
-            const resultMsgId = MessageId.makeUnsafe(`native-result-${childThreadId}`);
-            const resultText = summary ?? (status === "failed" ? "Task failed." : "Task completed.");
-            yield* orchestrationEngine.dispatch({
-              type: "thread.message.assistant.delta",
-              commandId: providerCommandId(event, "native-subagent-result-delta"),
-              threadId: childThreadId,
-              messageId: resultMsgId,
-              delta: resultText,
-              createdAt: event.createdAt,
-            });
-            yield* orchestrationEngine.dispatch({
-              type: "thread.message.assistant.complete",
-              commandId: providerCommandId(event, "native-subagent-result-complete"),
-              threadId: childThreadId,
-              messageId: resultMsgId,
-              createdAt: event.createdAt,
-            });
-
-            if (delegationTaskId) {
-              yield* orchestrationEngine.dispatch({
-                type: "delegation.child.complete",
-                commandId: providerCommandId(event, "native-subagent-child-complete"),
-                childThreadId,
-                taskId: delegationTaskId,
-                result: result as "completed" | "failed",
-                ...(summary ? { summary } : {}),
-                createdAt: event.createdAt,
-              });
-            }
-
-            yield* orchestrationEngine.dispatch({
-              type: "thread.session.set",
-              commandId: providerCommandId(event, "native-subagent-session-stopped"),
-              threadId: childThreadId,
-              session: {
-                threadId: childThreadId,
-                status: "stopped",
-                providerName: event.provider,
-                runtimeMode: "full-access",
-                activeTurnId: null,
-                lastError: status === "failed" ? (summary ?? "Sub-agent task failed") : null,
-                updatedAt: event.createdAt,
-              },
-              createdAt: event.createdAt,
-            });
-
-            subagentTaskToChildThread.delete(event.subagentTaskId);
-          }
-
-          // Route activities (task events, approvals) to the child thread
-          const activities = runtimeEventToActivities(event);
-          yield* Effect.forEach(activities, (activity) =>
-            orchestrationEngine.dispatch({
-              type: "thread.activity.append",
-              commandId: providerCommandId(event, "native-subagent-activity"),
-              threadId: childThreadId,
-              activity,
-              createdAt: activity.createdAt,
-            }),
-          ).pipe(Effect.asVoid);
-        }
-      }
-
       const readModel = yield* orchestrationEngine.getReadModel();
       const thread = readModel.threads.find((entry) => entry.id === event.threadId);
       if (!thread) return;
@@ -1266,6 +1122,22 @@ const make = Effect.gen(function* () {
             turnId,
             updatedAt: now,
           });
+
+          // Emit a thread.turn.completed domain event. This is the definitive
+          // "turn finished" signal — emitted after the assistant message is
+          // finalized, so consumers can read the summary from the read model.
+          const turnResult =
+            runtimeTurnState(event) === "completed" ? "completed" as const
+            : runtimeTurnState(event) === "interrupted" ? "interrupted" as const
+            : "failed" as const;
+          yield* orchestrationEngine.dispatch({
+            type: "thread.turn.completed",
+            commandId: providerCommandId(event, "thread-turn-completed"),
+            threadId: thread.id,
+            turnId,
+            result: turnResult,
+            createdAt: now,
+          });
         }
       }
 
@@ -1344,47 +1216,40 @@ const make = Effect.gen(function* () {
 
       // When a provider adapter emits a delegation.agent.spawned event, translate
       // it into a delegation.batch.start orchestration command so the
-      // DelegationReactor can spin up child threads.
+      // DelegationCoordinator can spin up child threads. All delegation is
+      // managed by our engine — no SDK-native delegation.
       if (event.type === "delegation.agent.spawned") {
+        const _dl = (msg: string) => { try { require("node:fs").appendFileSync("/tmp/t3-delegation-debug.log", `[${new Date().toISOString()}] ${msg}\n`); } catch {} };
         const payload = event.payload;
-        const delegationRequest: DelegationRequest = {
-          parentThreadId: thread.id,
-          agentId: payload.agentId,
-          subject: payload.subject,
-          description: payload.description ?? payload.subject,
-          prompt: payload.prompt ?? payload.description ?? payload.subject,
-        };
-
-        // Determine execution mode: native if the sub-agent's fallback chain
-        // includes the parent's provider, managed otherwise (cross-provider).
-        let executionMode: DelegationExecutionMode = "managed";
+        _dl(`[2-INGESTION] received delegation.agent.spawned agent=${payload.agentId} threadId=${thread.id} eventId=${event.eventId}`);
         const agentDef = yield* agentCatalog.getAgent(
           payload.agentId as any, // AgentId branded type
         );
-        if (agentDef) {
-          const parentProvider = event.provider;
-          const hasMatchingProvider = agentDef.modelFallbackChain.some(
-            (entry) => entry.provider === parentProvider,
-          );
-          executionMode = hasMatchingProvider ? "native" : "managed";
-        }
+        _dl(`[2-INGESTION] agentDef found=${!!agentDef} model=${agentDef?.modelFallbackChain[0]?.model ?? "none"}`);
+        const preferredModel = agentDef?.modelFallbackChain[0]?.model;
 
         const delegationCommand = buildDelegationBatchCommand(
           thread.id,
-          [delegationRequest],
-          { executionMode },
+          [{
+            parentThreadId: thread.id,
+            agentId: payload.agentId,
+            subject: payload.subject,
+            description: payload.description ?? payload.subject,
+            prompt: payload.prompt ?? payload.description ?? payload.subject,
+            ...(preferredModel ? { model: preferredModel } : {}),
+          }],
+          { executionMode: "managed" },
         );
 
-        // For native mode, register the subagentTaskId → childThreadId mapping
-        // so subsequent runtime events can be routed to the child thread.
-        if (executionMode === "native" && event.subagentTaskId) {
-          const childThreadId = delegationCommand.children[0]?.childThreadId;
-          if (childThreadId) {
-            subagentTaskToChildThread.set(event.subagentTaskId, childThreadId);
-          }
+        _dl(`[2-INGESTION] dispatching delegation.batch.start commandId=${delegationCommand.commandId} childThreadId=${delegationCommand.children[0]?.childThreadId}`);
+
+        // Track child→task mapping for delegation task completion.
+        for (const child of delegationCommand.children) {
+          childThreadToTaskId.set(child.childThreadId, child.taskId);
         }
 
         yield* orchestrationEngine.dispatch(delegationCommand);
+        _dl(`[2-INGESTION] dispatch complete for agent=${payload.agentId}`);
       }
 
       const activities = runtimeEventToActivities(event);

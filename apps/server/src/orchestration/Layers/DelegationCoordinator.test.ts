@@ -12,7 +12,7 @@ import {
   TaskId,
   ThreadId,
 } from "@t3tools/contracts";
-import { Effect, Exit, Layer, ManagedRuntime, Scope } from "effect";
+import { Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
@@ -24,6 +24,8 @@ import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { DelegationCoordinatorLive } from "./DelegationCoordinator.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { DelegationCoordinator } from "../Services/DelegationCoordinator.ts";
+import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { AgentCatalogService } from "../../agent/Services/AgentCatalog.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
@@ -87,8 +89,31 @@ describe("DelegationCoordinator", () => {
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provide(SqlitePersistenceMemory),
     );
+    // Stub ProviderService (no-op for resolveDelegation, interruptTurn, etc.)
+    const stubProviderService = Layer.succeed(ProviderService, {
+      startSession: () => Effect.die("not implemented in test"),
+      sendTurn: () => Effect.die("not implemented in test"),
+      interruptTurn: () => Effect.void,
+      respondToRequest: () => Effect.die("not implemented in test"),
+      respondToUserInput: () => Effect.die("not implemented in test"),
+      stopSession: () => Effect.die("not implemented in test"),
+      listSessions: () => Effect.succeed([]),
+      getCapabilities: () => Effect.die("not implemented in test"),
+      rollbackConversation: () => Effect.die("not implemented in test"),
+      resolveDelegation: () => Effect.void,
+      get streamEvents() { return Stream.empty; },
+    } as any);
+    // Stub AgentCatalogService (returns null for all agents)
+    const stubAgentCatalog = Layer.succeed(AgentCatalogService, {
+      getAgent: () => Effect.succeed(null),
+      listAgents: () => Effect.succeed([]),
+      getCatalog: () => Effect.succeed({ agents: [] }),
+      resolveModelForAgent: () => Effect.succeed(null),
+    } as any);
     const layer = DelegationCoordinatorLive.pipe(
       Layer.provideMerge(orchestrationLayer),
+      Layer.provideMerge(stubProviderService),
+      Layer.provideMerge(stubAgentCatalog),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), stateDir)),
       Layer.provideMerge(NodeServices.layer),
     );

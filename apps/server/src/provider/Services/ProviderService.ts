@@ -100,6 +100,19 @@ export interface ProviderServiceShape {
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Resolve a pending sync delegation on the parent thread's adapter.
+   * Called when a delegation child completes to unblock the parent's
+   * delegate_task tool call (wait=true mode).
+   */
+  readonly resolveDelegation: (input: {
+    readonly parentThreadId: ThreadId;
+    readonly childThreadId: ThreadId;
+    readonly taskId: string;
+    readonly result: "completed" | "failed" | "interrupted";
+    readonly summary?: string;
+  }) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
    * Canonical provider runtime event stream.
    *
    * Fan-out is owned by ProviderService (not by a standalone event-bus service).

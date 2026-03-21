@@ -62,6 +62,11 @@ interface CodexUserInputAnswer {
   answers: string[];
 }
 
+interface PendingDynamicToolCall {
+  jsonRpcId: string | number;
+  wait: boolean;
+}
+
 interface CodexSessionContext {
   session: ProviderSession;
   account: CodexAccountSnapshot;
@@ -70,6 +75,7 @@ interface CodexSessionContext {
   pending: Map<PendingRequestKey, PendingRequest>;
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
+  pendingDynamicToolCalls: Map<string, PendingDynamicToolCall>;
   collabReceiverTurns: Map<string, TurnId>;
   nextRequestId: number;
   stopping: boolean;
@@ -133,6 +139,11 @@ export interface CodexAppServerStartSessionInput {
   readonly resumeCursor?: unknown;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
   readonly runtimeMode: RuntimeMode;
+  readonly dynamic_tools?: Array<{
+    name: string;
+    description: string;
+    inputSchema: unknown;
+  }>;
 }
 
 export interface CodexThreadTurnSnapshot {
@@ -572,6 +583,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         pending: new Map(),
         pendingApprovals: new Map(),
         pendingUserInputs: new Map(),
+        pendingDynamicToolCalls: new Map(),
         collabReceiverTurns: new Map(),
         nextRequestId: 1,
         stopping: false,
@@ -618,6 +630,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const threadStartParams = {
         ...sessionOverrides,
         experimentalRawEvents: false,
+        ...(input.dynamic_tools?.length ? { dynamic_tools: input.dynamic_tools } : {}),
       };
       const resumeThreadId = readResumeThreadId(input);
       this.emitLifecycleEvent(
@@ -1020,6 +1033,28 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
+  /**
+   * Get a session context by thread ID (used by CodexAdapter for delegation resolution).
+   */
+  getSession(threadId: ThreadId): CodexSessionContext | undefined {
+    return this.sessions.get(threadId);
+  }
+
+  /**
+   * Write a JSON-RPC result for a dynamic tool call back to the Codex process.
+   */
+  writeToolCallResult(threadId: ThreadId, jsonRpcId: string | number, resultText: string): void {
+    const context = this.sessions.get(threadId);
+    if (!context) return;
+    this.writeMessage(context, {
+      id: jsonRpcId,
+      result: {
+        contentItems: [{ type: "input_text", text: resultText }],
+        success: true,
+      },
+    });
+  }
+
   private requireSession(threadId: ThreadId): CodexSessionContext {
     const context = this.sessions.get(threadId);
     if (!context) {
@@ -1261,6 +1296,58 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     if (request.method === "item/tool/requestUserInput") {
+      return;
+    }
+
+    // Handle dynamic tool calls (e.g. delegate_task).
+    if (request.method === "item/tool/call") {
+      const params = request.params as Record<string, unknown> | undefined;
+      const toolName = typeof params?.tool === "string" ? params.tool : undefined;
+      const toolArgs = params?.arguments as Record<string, unknown> | undefined;
+
+      if (toolName === "delegate_task" && toolArgs) {
+        const delegationId = `deleg-codex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+        // Store pending delegation — always blocks until child completes.
+        context.pendingDynamicToolCalls.set(delegationId, {
+          jsonRpcId: request.id,
+          wait: true,
+        });
+
+        // Emit the delegation event as a provider event for ProviderRuntimeIngestion
+        this.emitEvent({
+          id: EventId.makeUnsafe(randomUUID()),
+          kind: "notification",
+          provider: "codex",
+          threadId: context.session.threadId,
+          createdAt: new Date().toISOString(),
+          method: "delegation.agent.spawned",
+          ...(effectiveTurnId ? { turnId: effectiveTurnId } : {}),
+          payload: {
+            agentId: toolArgs.agent_id,
+            subject: typeof toolArgs.task === "string"
+              ? toolArgs.task.slice(0, 120)
+              : "Delegated task",
+            prompt: typeof toolArgs.task === "string" ? toolArgs.task : undefined,
+            description: typeof toolArgs.task === "string" ? toolArgs.task : undefined,
+            toolName: "delegate_task",
+            toolInput: toolArgs,
+            _delegationId: delegationId,
+          },
+        });
+
+        // Don't respond yet — wait for child completion via resolveDelegation
+        return;
+      }
+
+      // Unknown dynamic tool — respond with error
+      this.writeMessage(context, {
+        id: request.id,
+        error: {
+          code: -32601,
+          message: `Unknown dynamic tool: ${toolName}`,
+        },
+      });
       return;
     }
 

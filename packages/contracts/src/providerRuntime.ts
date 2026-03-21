@@ -583,6 +583,7 @@ const DelegationAgentSpawnedPayload = Schema.Struct({
   prompt: Schema.optional(TrimmedNonEmptyStringSchema),
   toolName: Schema.optional(TrimmedNonEmptyStringSchema),
   toolInput: Schema.optional(Schema.Unknown),
+  result: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type DelegationAgentSpawnedPayload = typeof DelegationAgentSpawnedPayload.Type;
 

@@ -120,6 +120,16 @@ export interface ProviderAdapterShape<TError> {
   readonly stopAll: () => Effect.Effect<void, TError>;
 
   /**
+   * Resolve a pending sync delegation on the given parent thread.
+   * Called when a child delegation completes to unblock the parent's
+   * delegate_task tool call (wait=true mode). No-op if no pending delegation.
+   */
+  readonly resolveDelegation: (
+    parentThreadId: ThreadId,
+    result: string,
+  ) => Effect.Effect<void, TError>;
+
+  /**
    * Canonical runtime event stream emitted by this adapter.
    */
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
