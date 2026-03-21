@@ -167,6 +167,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
+          delegation_json AS "delegationJson",
+          delegation_tasks_json AS "delegationTasksJson",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -543,28 +545,52 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             deletedAt: row.deletedAt,
           }));
 
-          const threads: Array<OrchestrationThread> = threadRows.map((row) => ({
-            id: row.threadId,
-            projectId: row.projectId,
-            title: row.title,
-            model: row.model,
-            runtimeMode: row.runtimeMode,
-            interactionMode: row.interactionMode,
-            agentId: row.agentId ?? null,
-            branch: row.branch,
-            worktreePath: row.worktreePath,
-            latestTurn: latestTurnByThread.get(row.threadId) ?? null,
-            createdAt: row.createdAt,
-            updatedAt: row.updatedAt,
-            deletedAt: row.deletedAt,
-            messages: messagesByThread.get(row.threadId) ?? [],
-            proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
-            activities: activitiesByThread.get(row.threadId) ?? [],
-            checkpoints: checkpointsByThread.get(row.threadId) ?? [],
-            session: sessionsByThread.get(row.threadId) ?? null,
-            delegation: null,
-            delegationTasks: [],
-          }));
+          const threads: Array<OrchestrationThread> = threadRows.map((row) => {
+            let delegation: OrchestrationThread["delegation"] = null;
+            let delegationTasks: OrchestrationThread["delegationTasks"] = [];
+            try {
+              if (row.delegationJson) {
+                const parsed = JSON.parse(row.delegationJson);
+                if (parsed !== null && typeof parsed === "object") {
+                  delegation = parsed;
+                }
+              }
+            } catch {
+              // ignore parse errors
+            }
+            try {
+              if (row.delegationTasksJson) {
+                const parsed = JSON.parse(row.delegationTasksJson);
+                if (Array.isArray(parsed)) {
+                  delegationTasks = parsed;
+                }
+              }
+            } catch {
+              // ignore parse errors
+            }
+            return {
+              id: row.threadId,
+              projectId: row.projectId,
+              title: row.title,
+              model: row.model,
+              runtimeMode: row.runtimeMode,
+              interactionMode: row.interactionMode,
+              agentId: row.agentId ?? null,
+              branch: row.branch,
+              worktreePath: row.worktreePath,
+              latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+              createdAt: row.createdAt,
+              updatedAt: row.updatedAt,
+              deletedAt: row.deletedAt,
+              messages: messagesByThread.get(row.threadId) ?? [],
+              proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
+              activities: activitiesByThread.get(row.threadId) ?? [],
+              checkpoints: checkpointsByThread.get(row.threadId) ?? [],
+              session: sessionsByThread.get(row.threadId) ?? null,
+              delegation,
+              delegationTasks,
+            };
+          });
 
           const snapshot = {
             snapshotSequence: computeSnapshotSequence(stateRows),

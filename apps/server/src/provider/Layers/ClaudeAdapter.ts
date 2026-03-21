@@ -1673,17 +1673,21 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 : {}),
               itemId: asRuntimeItemId(tool.itemId),
               payload: {
-                agentId: tool.toolName,
-                subject: typeof fullInput.prompt === "string"
-                  ? String(fullInput.prompt).slice(0, 120)
-                  : tool.toolName,
-                ...(typeof fullInput.description === "string"
-                  ? { description: String(fullInput.description) }
-                  : tool.detail
-                    ? { description: tool.detail }
-                    : {}),
+                agentId: typeof fullInput.subagent_type === "string"
+                  ? String(fullInput.subagent_type)
+                  : typeof fullInput.name === "string"
+                    ? String(fullInput.name)
+                    : tool.toolName,
+                subject: typeof fullInput.description === "string"
+                  ? String(fullInput.description).slice(0, 120)
+                  : typeof fullInput.subagent_type === "string"
+                    ? String(fullInput.subagent_type)
+                    : tool.toolName,
                 ...(typeof fullInput.prompt === "string"
                   ? { prompt: String(fullInput.prompt) }
+                  : {}),
+                ...(typeof fullInput.description === "string"
+                  ? { description: String(fullInput.description) }
                   : {}),
                 toolName: tool.toolName,
                 toolInput: fullInput,

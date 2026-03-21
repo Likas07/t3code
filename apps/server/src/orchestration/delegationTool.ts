@@ -37,6 +37,7 @@ export function buildDelegationBatchCommand(
       agentId: AgentId.makeUnsafe(req.agentId),
       subject: req.subject,
       description: req.description,
+      prompt: req.prompt,
     })),
     createdAt: now,
   };

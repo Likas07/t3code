@@ -427,6 +427,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
             latestTurnId: null,
+            delegationJson: JSON.stringify(event.payload.delegation ?? null),
+            delegationTasksJson: JSON.stringify([]),
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             deletedAt: null,
@@ -555,6 +557,84 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             latestTurnId: null,
+            updatedAt: event.occurredAt,
+          });
+          return;
+        }
+
+        case "task.created":
+        case "task.updated":
+        case "task.dependency-added":
+        case "delegation.child-completed": {
+          const threadId =
+            event.type === "delegation.child-completed"
+              ? event.payload.parentThreadId
+              : event.payload.threadId;
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          const currentTasks: Array<Record<string, unknown>> = (() => {
+            try {
+              const parsed = JSON.parse(existingRow.value.delegationTasksJson ?? "[]");
+              return Array.isArray(parsed) ? parsed : [];
+            } catch {
+              return [];
+            }
+          })();
+
+          if (event.type === "task.created") {
+            currentTasks.push(event.payload.task as unknown as Record<string, unknown>);
+          } else if (event.type === "task.updated") {
+            const idx = currentTasks.findIndex(
+              (t) => t.id === event.payload.taskId,
+            );
+            if (idx >= 0) {
+              currentTasks[idx] = {
+                ...currentTasks[idx],
+                status: event.payload.status,
+                ...(event.payload.summary !== undefined
+                  ? { summary: event.payload.summary }
+                  : {}),
+                updatedAt: event.payload.updatedAt,
+              };
+            }
+          } else if (event.type === "task.dependency-added") {
+            const idx = currentTasks.findIndex(
+              (t) => t.id === event.payload.taskId,
+            );
+            if (idx >= 0) {
+              const existing = currentTasks[idx]!;
+              const blockedBy = Array.isArray(existing.blockedBy)
+                ? [...existing.blockedBy, event.payload.blockedByTaskId]
+                : [event.payload.blockedByTaskId];
+              currentTasks[idx] = {
+                ...existing,
+                blockedBy,
+                updatedAt: event.payload.updatedAt,
+              };
+            }
+          } else if (event.type === "delegation.child-completed") {
+            const idx = currentTasks.findIndex(
+              (t) => t.id === event.payload.taskId,
+            );
+            if (idx >= 0) {
+              currentTasks[idx] = {
+                ...currentTasks[idx],
+                status: event.payload.result === "completed" ? "completed" : "deleted",
+                ...(event.payload.summary !== undefined
+                  ? { summary: event.payload.summary }
+                  : {}),
+                updatedAt: event.payload.completedAt,
+              };
+            }
+          }
+
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            delegationTasksJson: JSON.stringify(currentTasks),
             updatedAt: event.occurredAt,
           });
           return;
