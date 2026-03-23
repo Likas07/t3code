@@ -2639,10 +2639,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
       }
 
       if (isServerThread) {
+        const modelForTurn = agentResolvedModel?.model ?? selectedModel;
         await persistThreadSettingsForNextTurn({
           threadId: threadIdForSend,
           createdAt: messageCreatedAt,
-          ...(selectedModel ? { model: selectedModel } : {}),
+          ...(modelForTurn ? { model: modelForTurn } : {}),
           runtimeMode,
           interactionMode,
         });
@@ -2660,7 +2661,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           text: outgoingMessageText,
           attachments: turnAttachments,
         },
-        model: selectedModel || undefined,
+        model: agentResolvedModel?.model ?? (selectedModel || undefined),
         ...(selectedModelOptionsForDispatch
           ? { modelOptions: selectedModelOptionsForDispatch }
           : {}),
@@ -2924,10 +2925,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
       forceStickToBottom();
 
       try {
+        const modelForTurn = agentResolvedModel?.model ?? selectedModel;
         await persistThreadSettingsForNextTurn({
           threadId: threadIdForSend,
           createdAt: messageCreatedAt,
-          ...(selectedModel ? { model: selectedModel } : {}),
+          ...(modelForTurn ? { model: modelForTurn } : {}),
           runtimeMode,
           interactionMode: nextInteractionMode,
         });
@@ -2947,7 +2949,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
             attachments: [],
           },
           provider: selectedProvider,
-          model: selectedModel || undefined,
+          model: agentResolvedModel?.model ?? (selectedModel || undefined),
           ...(selectedModelOptionsForDispatch
             ? { modelOptions: selectedModelOptionsForDispatch }
             : {}),
@@ -3073,7 +3075,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
             attachments: [],
           },
           provider: selectedProvider,
-          model: selectedModel || undefined,
+          model: agentResolvedModel?.model ?? (selectedModel || undefined),
           ...(selectedModelOptionsForDispatch
             ? { modelOptions: selectedModelOptionsForDispatch }
             : {}),

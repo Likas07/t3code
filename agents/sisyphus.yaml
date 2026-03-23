@@ -81,6 +81,7 @@ delegationPolicy:
     - momus
     - hephaestus
     - multimodal-looker
+    - prometheus
   maxDepth: 2
 tags:
   - orchestrator

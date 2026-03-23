@@ -242,9 +242,23 @@ const make = Effect.gen(function* () {
       : undefined;
     const threadProvider: ProviderKind = currentProvider ?? inferProviderForModel(thread.model);
     if (options?.provider !== undefined && options.provider !== threadProvider) {
-      // Allow provider switching for delegation child threads — the agent's
-      // preferred provider was explicitly resolved by the orchestration layer.
-      if (!thread.delegation) {
+      // Allow provider switching when the requested provider and model are
+      // coherent (same provider) and no active session exists yet. This
+      // happens when an agent's fallback chain resolves to a different
+      // provider than the thread's stored model — e.g. Hephaestus resolves
+      // to codex/gpt-5.4 but the thread's model was claude-opus-4-6 from
+      // a previous default.
+      const requestedModelProvider = options.model !== undefined
+        ? inferProviderForModel(options.model)
+        : undefined;
+      const isCoherentProviderSwitch =
+        currentProvider === undefined &&
+        requestedModelProvider === options.provider;
+
+      // Also allow provider switching for delegation child threads — the
+      // agent's preferred provider was explicitly resolved by the
+      // orchestration layer.
+      if (!thread.delegation && !isCoherentProviderSwitch) {
         return yield* new ProviderAdapterRequestError({
           provider: threadProvider,
           method: "thread.turn.start",
@@ -252,17 +266,24 @@ const make = Effect.gen(function* () {
         });
       }
     }
+    // When a provider switch was accepted (e.g. agent resolved to codex but
+    // thread model was claude), use the requested provider for downstream
+    // validation and session creation instead of the stale thread-inferred one.
+    const effectiveProvider: ProviderKind =
+      options?.provider !== undefined && options.provider !== threadProvider && currentProvider === undefined
+        ? options.provider
+        : threadProvider;
     if (
       options?.model !== undefined &&
-      inferProviderForModel(options.model, threadProvider) !== threadProvider
+      inferProviderForModel(options.model, effectiveProvider) !== effectiveProvider
     ) {
       return yield* new ProviderAdapterRequestError({
-        provider: threadProvider,
+        provider: effectiveProvider,
         method: "thread.turn.start",
-        detail: `Model '${options.model}' does not belong to provider '${threadProvider}' for thread '${threadId}'.`,
+        detail: `Model '${options.model}' does not belong to provider '${effectiveProvider}' for thread '${threadId}'.`,
       });
     }
-    const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
+    const preferredProvider: ProviderKind = currentProvider ?? effectiveProvider;
     const desiredModel = options?.model ?? thread.model;
     const effectiveCwd = resolveThreadWorkspaceCwd({
       thread,
@@ -542,11 +563,25 @@ const make = Effect.gen(function* () {
 
     // Resolve provider/model from agent fallback chain if agentId is set
     // and no explicit provider/model was specified in the command.
+    // Also validate provider/model coherence — a cross-provider mismatch
+    // (e.g. provider="codex" + model="claude-opus-4-6") causes silent hangs.
     let resolvedProvider = event.payload.provider;
     let resolvedModel = event.payload.model;
     let resolvedModelOptions = event.payload.modelOptions;
 
-    if (event.payload.agentId && resolvedProvider === undefined && resolvedModel === undefined) {
+    const needsAgentResolution = event.payload.agentId && (
+      // No provider/model specified — resolve from fallback chain
+      (resolvedProvider === undefined && resolvedModel === undefined) ||
+      // Provider/model mismatch — the model doesn't belong to the specified provider.
+      // This can happen when the client sends the agent's provider but the
+      // thread's model (from a different provider). Without this check the
+      // server would try to start e.g. a codex session with a claude model,
+      // which hangs silently.
+      (resolvedProvider !== undefined && resolvedModel !== undefined &&
+        inferProviderForModel(resolvedModel) !== resolvedProvider)
+    );
+
+    if (needsAgentResolution) {
       // Determine which providers to check. For delegation child threads,
       // always check all providers since the child starts its own session
       // and should use the agent's preferred provider. For regular threads,

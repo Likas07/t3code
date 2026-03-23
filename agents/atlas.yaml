@@ -28,6 +28,7 @@ systemPrompt: |
   - oracle: Complex debugging, architecture decisions, design review.
   - metis: Pre-planning analysis for ambiguous or large tasks.
   - momus: Plan validation and quality review.
+    - prometheus: Strategic planning — interviews user, generates comprehensive work plans.
 
   ### Step 3: Delegate with Context
   For each delegation:
@@ -81,6 +82,7 @@ delegationPolicy:
     - momus
     - hephaestus
     - multimodal-looker
+    - prometheus
   maxDepth: 2
 tags:
   - orchestrator
